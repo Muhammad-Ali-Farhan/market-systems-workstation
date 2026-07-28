@@ -13,18 +13,11 @@ ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)
 prepare_native_runtime(ROOT)
 
-import numpy as np  # noqa: E402
+import numpy as np  
 
-from microstructure import (  # noqa: E402
-    FEATURE_NAMES,
-    OnlineFeatureBuilder,
-    build_feature_set,
-)
-from qbin import RECORD_DTYPE  # noqa: E402
-from research_diagnostics import (  # noqa: E402
-    newey_west_mean_t_statistic,
-    spearman_correlation,
-)
+from microstructure import FEATURE_NAMES, OnlineFeatureBuilder, build_feature_set  
+from qbin import RECORD_DTYPE  
+from research_diagnostics import newey_west_mean_t_statistic, spearman_correlation  
 
 failures = 0
 
