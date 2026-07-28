@@ -1,0 +1,69 @@
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Native and packaging output
+build/
+build-app/
+dist/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+vcpkg_installed/
+*.dll
+*.lib
+*.exp
+*.obj
+*.pdb
+*.pyd
+*.exe
+*.spec
+
+# Generated workstation state
+.market_ui/
+logs/
+*.log
+recordings/*.qbin
+recordings/*.qbin.meta.json
+recordings/*.qbin.qids
+artifacts/*.npz
+artifacts/*.csv
+artifacts/*.json
+artifacts/*.md
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary repository exports
+ProjectDump.txt
+
+
+# L2 recordings and evidence
+recordings/l2/
+artifacts/l2/
+*.l2bin
+*.l2bin.l2chk
+*.l2bin.meta.json
+
+# Local native backups and validated release output
+.native-backups/
+_release/
+*.zip
+
+# Whole-repository context/source dumps
+all_project_files.txt
+all files*.txt
+*project_bundle*.txt

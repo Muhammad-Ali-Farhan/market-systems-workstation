@@ -1,0 +1,7 @@
+
+-r requirements-desktop.txt
+pybind11==2.13.6
+pyinstaller==6.16.0
+cmake==4.0.3
+ninja==1.11.1.4
+

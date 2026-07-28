@@ -1,0 +1,96 @@
+
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "market-systems-workstation"
+version = "1.0.0"
+description = "C++20 top-of-book and sequence-correct L2 market-data, deterministic replay, execution simulation, and microstructure research"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.12,<3.13"
+authors = [{name = "Muhammad Ali Farhan"}]
+dependencies = [
+  "numpy==2.5.1",
+  "certifi==2026.6.17",
+  "websocket-client==1.8.0",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: C++",
+  "Programming Language :: C++ :: 20",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: Microsoft :: Windows",
+  "Topic :: Office/Business :: Financial",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.scripts]
+market-analytics = "analytics:main"
+market-benchmark = "benchmark:main"
+market-capture = "capture_session:main"
+market-recording-info = "recording_info:main"
+market-train-alpha = "train_alpha:main"
+market-alpha-monitor = "alpha_monitor:main"
+market-verify-replay = "verify_replay:main"
+market-workstation = "market_workstation:main"
+market-l2-capture = "l2_capture:main"
+market-l2-verify = "verify_l2_replay:main"
+market-l2-info = "l2_recording_info:main"
+market-l2-benchmark = "l2_benchmark:main"
+market-l2-research = "l2_research:main"
+market-l2-simulate = "execution_simulator:main"
+market-l2-execution-sensitivity = "l2_execution_sensitivity:main"
+
+[tool.setuptools]
+include-package-data = false
+py-modules = [
+  "alpha_monitor",
+  "analytics",
+  "benchmark",
+  "capture_session",
+  "microstructure",
+  "native_runtime",
+  "qbin",
+  "market_workstation",
+  "recording_info",
+  "research",
+  "research_diagnostics",
+  "train_alpha",
+  "verify_replay",
+  "verify_workstation",
+  "execution_simulator",
+  "l2_benchmark",
+  "l2_capture",
+  "l2_features",
+  "l2_execution_sensitivity",
+  "l2_research",
+  "l2_recording_info",
+  "l2bin",
+  "l2book",
+  "verify_l2_replay",
+]
+
+[tool.setuptools.packages.find]
+include = ["market_ui*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["build", "build-app", "dist", "vcpkg_installed"]
+
+[tool.ruff.lint]
+# Pin the policy explicitly. Ruff 0.16 expanded its implicit defaults, so relying
+# on version-dependent defaults makes local review and CI disagree.
+select = ["E4", "E7", "E9", "F"]
+

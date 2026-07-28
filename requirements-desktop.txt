@@ -1,0 +1,5 @@
+
+numpy==2.5.1
+certifi==2026.6.17
+
+websocket-client==1.8.0

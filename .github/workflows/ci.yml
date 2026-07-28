@@ -1,0 +1,136 @@
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m compileall -q -f .
+      - run: python -m pytest
+      - run: python -m ruff check .
+
+  native-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-system-dev libssl-dev libsimdjson-dev
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+      - name: Configure and build
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DMARKET_BUILD_TESTS=ON
+          -DMARKET_BUILD_BENCHMARKS=ON
+      - run: cmake --build build --parallel
+      - run: ctest --test-dir build --output-on-failure
+      - name: Import native extension
+        run: |
+          PYTHONPATH=build python -c "import quant_engine; assert quant_engine.order_book_dtype.itemsize == 32; assert quant_engine.l2_parse_price('1.0') == 100000000; assert quant_engine.L2Synchronizer().state == 'awaiting_snapshot'"
+      - run: ./build/native_queue_benchmark 5000000
+      - run: ./build/l2_book_benchmark 100000
+
+  native-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+      - name: Bootstrap pinned vcpkg
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
+          git -C "$env:RUNNER_TEMP\vcpkg" checkout 2475cc332a47b3a63bb3de58293bdab7726613ca
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+      - name: Configure and build Release
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+            -DMARKET_BUILD_TESTS=ON
+          cmake --build build --config Release --parallel
+      - name: Run native tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Import native extension
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "$pwd\build\Release"
+          python -c "import quant_engine; assert quant_engine.order_book_dtype.itemsize == 32; assert quant_engine.l2_parse_price('1.0') == 100000000; assert quant_engine.L2Synchronizer().state == 'awaiting_snapshot'"
+
+  address-undefined-sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile with ASan and UBSan
+        run: |
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -pthread -I. \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/ring_buffer_tests.cpp -o ring_buffer_sanitized
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -pthread -I. \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/binary_io_tests.cpp -o binary_io_sanitized
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -pthread -I. \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/l2_order_book_tests.cpp -o l2_order_book_sanitized
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -pthread -I. \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            tests/l2_binary_format_tests.cpp -o l2_binary_format_sanitized
+      - run: ./ring_buffer_sanitized
+      - run: ./binary_io_sanitized
+      - run: ./l2_order_book_sanitized
+      - run: ./l2_binary_format_sanitized
+
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile with TSan
+        run: >-
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Wpedantic -pthread -I.
+          -fsanitize=thread -fno-omit-frame-pointer
+          tests/ring_buffer_tests.cpp -o ring_buffer_tsan
+      - run: ./ring_buffer_tsan
+
+
+  l2-fuzzer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build L2 binary fuzzer
+        run: >-
+          clang++ -std=c++20 -O1 -g -I.
+          -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer
+          fuzz/l2_binary_fuzzer.cpp -o l2_binary_fuzzer
+      - name: Seed corpus
+        run: |
+          mkdir -p fuzz-corpus
+          printf 'not-a-valid-l2-file' > fuzz-corpus/invalid
+      - run: ./l2_binary_fuzzer fuzz-corpus -max_total_time=5 -timeout=2
