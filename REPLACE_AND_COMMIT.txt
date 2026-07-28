@@ -1,0 +1,25 @@
+FILES TO REPLACE
+================
+
+1. verify_workstation.py
+   Destination: repository root\verify_workstation.py
+
+2. app.py
+   Destination: repository root\market_ui\app.py
+
+3. test_quality_policy.py
+   Destination: repository root\tests\test_quality_policy.py
+
+After replacing the files, open PowerShell in the repository root and run:
+
+    python -m ruff check .
+    python -m pytest
+    git status
+    git add verify_workstation.py market_ui/app.py tests/test_quality_policy.py
+    git commit -m "Fix CI lint and finish UI branding cleanup"
+    git push
+
+Expected checks:
+
+    Ruff: All checks passed!
+    Pytest: 75 passed
