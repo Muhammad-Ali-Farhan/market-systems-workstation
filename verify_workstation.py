@@ -13,11 +13,18 @@ ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)
 prepare_native_runtime(ROOT)
 
-import numpy as np
+import numpy as np  # noqa: E402
 
-from microstructure import FEATURE_NAMES, OnlineFeatureBuilder, build_feature_set
-from qbin import RECORD_DTYPE
-from research_diagnostics import newey_west_mean_t_statistic, spearman_correlation
+from microstructure import (  # noqa: E402
+    FEATURE_NAMES,
+    OnlineFeatureBuilder,
+    build_feature_set,
+)
+from qbin import RECORD_DTYPE  # noqa: E402
+from research_diagnostics import (  # noqa: E402
+    newey_west_mean_t_statistic,
+    spearman_correlation,
+)
 
 failures = 0
 
@@ -54,7 +61,6 @@ def verify_tk() -> str:
         root.destroy()
 
 
-
 def verify_websocket_client() -> str:
     import websocket
 
@@ -85,8 +91,6 @@ def verify_engine() -> str:
         raise RuntimeError(f"Native extension is missing API methods: {missing}")
     engine.stop()
     return f"IngestionEngine API ready | dtype={dtype}"
-
-
 
 
 def verify_native_l2() -> str:

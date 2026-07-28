@@ -274,7 +274,7 @@ class EngineRunner(threading.Thread):
             self.emit("error", traceback.format_exc())
 
 
-class QuantWorkstation(tk.Tk):
+class MarketWorkstation(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.withdraw()
@@ -1417,7 +1417,7 @@ class QuantWorkstation(tk.Tk):
 def main() -> int:
     prepare_native_runtime()
     os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-    app = QuantWorkstation()
+    app = MarketWorkstation()
     app.mainloop()
     return 0
 
