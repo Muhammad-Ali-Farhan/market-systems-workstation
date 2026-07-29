@@ -68,13 +68,23 @@ jobs:
           git clone --filter=blob:none https://github.com/microsoft/vcpkg "$env:RUNNER_TEMP\vcpkg"
           git -C "$env:RUNNER_TEMP\vcpkg" checkout 2475cc332a47b3a63bb3de58293bdab7726613ca
           & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-      - name: Configure and build Release
-        shell: pwsh
+      - name: Configure and build Release with MSVC
+        shell: cmd
         run: |
-          cmake -S . -B build -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="$env:RUNNER_TEMP\vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo ERROR: Visual Studio C++ toolchain was not found.
+            exit /b 1
+          )
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          where cl
+          where link
+          cmake -S . -B build -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER=cl.exe ^
+            -DCMAKE_CXX_COMPILER=cl.exe ^
+            -DCMAKE_TOOLCHAIN_FILE="%RUNNER_TEMP%\vcpkg\scripts\buildsystems\vcpkg.cmake" ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md ^
             -DMARKET_BUILD_TESTS=ON
           cmake --build build --parallel
       - name: Run native tests
