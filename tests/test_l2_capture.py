@@ -104,3 +104,55 @@ def test_symbol_capture_bootstraps_and_recovers_gap(tmp_path) -> None:
     events = tuple(iter_events(tmp_path / "sync.l2bin"))
     assert sum(isinstance(item, Snapshot) for item in events) == 2
     assert sum(isinstance(item, DepthUpdate) for item in events) == 2
+
+
+def test_stream_integer_fields_do_not_coerce_strings_or_booleans() -> None:
+    string_timestamp = json.dumps(
+        {
+            "data": {
+                "e": "depthUpdate",
+                "E": "123",
+                "s": "BTCUSDT",
+                "U": 10,
+                "u": 12,
+                "b": [],
+                "a": [],
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="'E'.*integer"):
+        parse_stream_message(string_timestamp, 999)
+
+    boolean_trade_id = json.dumps(
+        {
+            "data": {
+                "e": "aggTrade",
+                "E": 123,
+                "s": "BTCUSDT",
+                "a": True,
+                "p": "100.00000000",
+                "q": "1.00000000",
+                "m": False,
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="'a'.*integer"):
+        parse_stream_message(boolean_trade_id, 999)
+
+
+def test_aggregate_trade_maker_flag_must_be_boolean() -> None:
+    raw = json.dumps(
+        {
+            "data": {
+                "e": "aggTrade",
+                "E": 123,
+                "s": "BTCUSDT",
+                "a": 44,
+                "p": "100.00000000",
+                "q": "1.00000000",
+                "m": "false",
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="'m'.*boolean"):
+        parse_stream_message(raw, 999)

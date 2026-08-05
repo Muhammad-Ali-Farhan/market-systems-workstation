@@ -75,9 +75,23 @@ def _optional_int(payload: dict[str, object], key: str) -> int | None:
     value = payload.get(key)
     if value is None:
         return None
-    if isinstance(value, bool):
+    if type(value) is not int:
         raise RuntimeError(f"Sidecar field {key!r} must be an integer.")
-    return int(value)
+    return value
+
+
+def _required_int(payload: dict[str, object], key: str) -> int:
+    value = _optional_int(payload, key)
+    if value is None:
+        raise RuntimeError(f"Sidecar field {key!r} is required and must be an integer.")
+    return value
+
+
+def _required_string(payload: dict[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise RuntimeError(f"Sidecar field {key!r} must be a string.")
+    return value
 
 
 def _optional_bool(payload: dict[str, object], key: str) -> bool | None:
@@ -101,7 +115,7 @@ def _read_sidecar(path: Path, record_count: int) -> tuple[Path | None, dict[str,
 
     if not isinstance(payload, dict):
         raise RuntimeError(f"Recording sidecar must contain a JSON object: {sidecar}")
-    if int(payload.get("schema_version", 0)) != 1:
+    if _required_int(payload, "schema_version") != 1:
         raise RuntimeError(f"Unsupported recording sidecar schema: {sidecar}")
     if "update_id_file" not in payload:
         raise RuntimeError(
@@ -114,7 +128,7 @@ def _read_sidecar(path: Path, record_count: int) -> tuple[Path | None, dict[str,
         "volume_scale": EXPECTED_VOLUME_SCALE,
     }
     for key, expected in expected_numeric_fields.items():
-        if key in payload and int(payload[key]) != expected:
+        if key in payload and _required_int(payload, key) != expected:
             raise RuntimeError(
                 f"Sidecar field {key!r} does not match the binary file: {sidecar}"
             )
@@ -125,12 +139,13 @@ def _read_sidecar(path: Path, record_count: int) -> tuple[Path | None, dict[str,
         "stream": "bookTicker",
     }
     for key, expected in expected_identity_fields.items():
-        if str(payload.get(key, "")) != expected:
+        if _required_string(payload, key) != expected:
             raise RuntimeError(
                 f"Sidecar field {key!r} is invalid for this reader: {sidecar}"
             )
-    if "recording_file" in payload and str(payload["recording_file"]) != path.name:
-        raise RuntimeError(f"Sidecar belongs to a different recording: {sidecar}")
+    if "recording_file" in payload:
+        if _required_string(payload, "recording_file") != path.name:
+            raise RuntimeError(f"Sidecar belongs to a different recording: {sidecar}")
 
     raw_boundaries = payload.get("boundaries", [])
     if not isinstance(raw_boundaries, list):
@@ -140,13 +155,16 @@ def _read_sidecar(path: Path, record_count: int) -> tuple[Path | None, dict[str,
     for item in raw_boundaries:
         if not isinstance(item, dict):
             raise RuntimeError(f"Invalid sidecar boundary entry: {sidecar}")
-        index = int(item.get("record_index", -1))
-        kind = str(item.get("kind", "")).strip()
+        index = item.get("record_index")
+        kind = item.get("kind")
+        if type(index) is not int or not isinstance(kind, str):
+            raise RuntimeError(f"Invalid sidecar boundary entry: {item!r}")
+        kind = kind.strip()
         if index < 0 or index > record_count or not kind:
             raise RuntimeError(f"Invalid sidecar boundary entry: {item!r}")
         boundaries.append({"record_index": index, "kind": kind})
 
-    boundaries.sort(key=lambda item: (int(item["record_index"]), str(item["kind"])))
+    boundaries.sort(key=lambda item: (item["record_index"], item["kind"]))
     deduplicated: list[dict[str, object]] = []
     for item in boundaries:
         if not deduplicated or item != deduplicated[-1]:
@@ -167,9 +185,12 @@ def _read_update_id_metadata(
     raw_name = payload.get("update_id_file")
     if raw_name is None:
         return None, None
-    if int(payload.get("update_id_version", UPDATE_ID_VERSION)) != UPDATE_ID_VERSION:
+    update_id_version = _optional_int(payload, "update_id_version")
+    if update_id_version is not None and update_id_version != UPDATE_ID_VERSION:
         raise RuntimeError("Unsupported sidecar update-ID version.")
-    name = str(raw_name)
+    if not isinstance(raw_name, str):
+        raise RuntimeError("Sidecar update_id_file must be a string.")
+    name = raw_name
     if not name or Path(name).name != name:
         raise RuntimeError("Sidecar update_id_file must be a filename in the recording folder.")
     path = recording_path.parent / name
@@ -230,9 +251,9 @@ def read_metadata(file_path: str | Path) -> RecordingMetadata:
         flags,
         volume_scale,
         created_unix_ns,
-        _reserved_1,
-        _reserved_2,
-        _reserved_3,
+        reserved_1,
+        reserved_2,
+        reserved_3,
     ) = HEADER_STRUCT.unpack(header)
 
     if magic != EXPECTED_MAGIC:
@@ -247,6 +268,8 @@ def read_metadata(file_path: str | Path) -> RecordingMetadata:
         raise RuntimeError(f"Unsupported recording flags in {path}: {flags}")
     if volume_scale != EXPECTED_VOLUME_SCALE:
         raise RuntimeError(f"Unexpected volume scale in {path}: {volume_scale}")
+    if any((reserved_1, reserved_2, reserved_3)):
+        raise RuntimeError(f"Unsupported nonzero reserved header fields in {path}.")
 
     payload_size = file_size - header_size
     if payload_size % record_size != 0:
@@ -280,7 +303,7 @@ def read_metadata(file_path: str | Path) -> RecordingMetadata:
         record_count=record_count,
     )
     boundaries = tuple(
-        RecordingBoundary(int(item["record_index"]), str(item["kind"]))
+        RecordingBoundary(item["record_index"], item["kind"])
         for item in sidecar.get("boundaries", [])
     )
 
@@ -321,6 +344,17 @@ def read_metadata(file_path: str | Path) -> RecordingMetadata:
         if update_id_count != record_count:
             raise RuntimeError(f"Complete recording update-ID count disagrees: {path}")
 
+    consumer_queue_dropped = _optional_int(sidecar, "consumer_queue_dropped")
+    malformed_messages = _optional_int(sidecar, "malformed_messages")
+    reconnect_count = _optional_int(sidecar, "reconnect_count")
+    for key, value in (
+        ("consumer_queue_dropped", consumer_queue_dropped),
+        ("malformed_messages", malformed_messages),
+        ("reconnect_count", reconnect_count),
+    ):
+        if value is not None and value < 0:
+            raise RuntimeError(f"Sidecar field {key!r} cannot be negative: {path}")
+
     first_update_id = _optional_int(sidecar, "first_update_id")
     last_update_id = _optional_int(sidecar, "last_update_id")
     for key, value in (("first_update_id", first_update_id), ("last_update_id", last_update_id)):
@@ -354,9 +388,9 @@ def read_metadata(file_path: str | Path) -> RecordingMetadata:
         recorded_records=sidecar_recorded,
         recording_dropped=recording_dropped,
         recording_write_errors=write_errors,
-        consumer_queue_dropped=_optional_int(sidecar, "consumer_queue_dropped"),
-        malformed_messages=_optional_int(sidecar, "malformed_messages"),
-        reconnect_count=_optional_int(sidecar, "reconnect_count"),
+        consumer_queue_dropped=consumer_queue_dropped,
+        malformed_messages=malformed_messages,
+        reconnect_count=reconnect_count,
         boundaries=boundaries,
     )
 

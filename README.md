@@ -139,21 +139,28 @@ py -3.12 -m venv .venv
 
 ### Windows native build
 
+Install Visual Studio Build Tools with **Desktop development with C++**, then point the script at vcpkg:
+
 ```powershell
 $env:VCPKG_ROOT = "C:\path\to\vcpkg"
 .\BUILD_NATIVE.ps1
 ```
 
-Or configure directly:
+`BUILD_NATIVE.ps1` locates Visual Studio through `vswhere`, activates the x64 MSVC developer environment, and configures Ninja with `cl.exe`. This prevents MinGW/MSVC library mismatches when linking the static vcpkg dependencies.
 
-```powershell
-cmake -S . -B build -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
-  -DMARKET_BUILD_TESTS=ON `
+For a manual build, first open an **x64 Native Tools Command Prompt for Visual Studio**, then run from the repository root:
+
+```cmd
+.venv\Scripts\cmake.exe -S . -B build-native -G Ninja ^
+  -DCMAKE_BUILD_TYPE=Release ^
+  -DCMAKE_C_COMPILER=cl.exe ^
+  -DCMAKE_CXX_COMPILER=cl.exe ^
+  -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md ^
+  -DMARKET_BUILD_TESTS=ON ^
   -DMARKET_BUILD_BENCHMARKS=ON
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure
+.venv\Scripts\cmake.exe --build build-native --parallel
+.venv\Scripts\ctest.exe --test-dir build-native --output-on-failure
 ```
 
 Copy the built `quant_engine.cp312-win_amd64.pyd` into the repository root, then run:
@@ -201,7 +208,7 @@ Each symbol produces:
 For the native order-book benchmark:
 
 ```powershell
-.\build\Release\l2_book_benchmark.exe 1000000
+.\build-native\l2_book_benchmark.exe 1000000
 ```
 
 ### Run chronological research
@@ -236,7 +243,7 @@ $sessions = Get-ChildItem recordings\l2\btcusdt-*.l2bin |
 .\.venv\Scripts\python.exe -m compileall -q -f .
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m pytest
-ctest --test-dir build -C Release --output-on-failure
+ctest --test-dir build-native --output-on-failure
 ```
 
 CI additionally runs AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer on the SPSC queue, and a bounded L2 binary-format fuzz target.

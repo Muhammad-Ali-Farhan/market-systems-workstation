@@ -115,3 +115,10 @@ def test_l2_identifiers_must_fit_uint64() -> None:
         Snapshot(1, 1 << 64, (Level(10_000, 1),), (Level(10_100, 1),))
     with pytest.raises(ValueError):
         DepthUpdate(1, 0, 1, 1 << 64)
+
+
+def test_l2_levels_reject_boolean_scalars() -> None:
+    with pytest.raises(TypeError, match="price must be an integer"):
+        Level(True, 1)
+    with pytest.raises(TypeError, match="quantity must be an integer"):
+        Level(10_000, False)

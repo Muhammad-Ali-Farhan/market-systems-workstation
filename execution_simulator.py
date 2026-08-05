@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from l2bin import Boundary, iter_events
+from l2bin import Boundary, iter_events, read_metadata
 from l2book import (
     PRICE_SCALE,
     QUANTITY_SCALE,
@@ -279,8 +279,13 @@ class ExecutionSimulator:
     def run(self, recording: str | Path) -> SimulationResult:
         if self._has_run:
             raise RuntimeError("One ExecutionSimulator instance can run only once.")
+        metadata = read_metadata(recording, verify_hashes=True)
+        if metadata.data_complete is not True:
+            raise RuntimeError(
+                "Execution simulation requires a complete, hash-verified L2 recording."
+            )
         self._has_run = True
-        for event in iter_events(recording):
+        for event in iter_events(metadata.path):
             timestamp = event.receipt_timestamp_ns
 
             # Requests and cancels that arrived strictly before this market-data

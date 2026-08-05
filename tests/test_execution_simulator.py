@@ -242,3 +242,25 @@ def test_execution_configuration_rejects_ambiguous_values() -> None:
         ExecutionConfig(kill_switch_loss_quote=float("nan"))
     with pytest.raises(ValueError):
         ExecutionConfig(markout_horizons_ns=(1, 1))
+
+
+def test_execution_simulator_rejects_incomplete_recording(tmp_path: Path) -> None:
+    path = tmp_path / "incomplete.l2bin"
+    writer = L2Writer(path, "BTCUSDT")
+    writer.write(Boundary(1, BoundaryReason.CONNECTION_START))
+    writer.abort()
+
+    simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0))
+    with pytest.raises(RuntimeError, match="complete, hash-verified"):
+        simulator.run(path)
+
+
+def test_execution_simulator_rejects_hash_mismatch(tmp_path: Path) -> None:
+    path = write_market(tmp_path / "hash-mismatch.l2bin")
+    sidecar = Path(f"{path}.meta.json")
+    payload = sidecar.read_text(encoding="utf-8")
+    sidecar.write_text(payload.replace('"sha256": "', '"sha256": "0'), encoding="utf-8")
+
+    simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0))
+    with pytest.raises(RuntimeError, match="SHA-256"):
+        simulator.run(path)

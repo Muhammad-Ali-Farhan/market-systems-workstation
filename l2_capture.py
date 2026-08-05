@@ -45,6 +45,21 @@ def monotonic_ns() -> int:
     return time.monotonic_ns()
 
 
+
+def _required_json_int(payload: dict[str, object], key: str) -> int:
+    value = payload.get(key)
+    if type(value) is not int:
+        raise ValueError(f"Stream field {key!r} must be an integer.")
+    return value
+
+
+def _required_json_bool(payload: dict[str, object], key: str) -> bool:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"Stream field {key!r} must be a boolean.")
+    return value
+
+
 def parse_stream_message(raw_message: str, receipt_timestamp_ns: int) -> tuple[str, DepthUpdate | Trade]:
     try:
         payload = json.loads(raw_message)
@@ -55,27 +70,30 @@ def parse_stream_message(raw_message: str, receipt_timestamp_ns: int) -> tuple[s
     data = payload.get("data", payload)
     if not isinstance(data, dict):
         raise ValueError("Combined stream payload does not contain an object.")
-    event_type = str(data.get("e", ""))
-    symbol = str(data.get("s", "")).upper()
-    if not symbol:
-        raise ValueError("Stream event does not name a symbol.")
+    event_type = data.get("e")
+    symbol_value = data.get("s")
+    if not isinstance(event_type, str):
+        raise ValueError("Stream event type must be a string.")
+    if not isinstance(symbol_value, str) or not symbol_value:
+        raise ValueError("Stream event does not name a valid symbol.")
+    symbol = symbol_value.upper()
     if event_type == "depthUpdate":
         return symbol, DepthUpdate(
             receipt_timestamp_ns=receipt_timestamp_ns,
-            event_time_ms=int(data["E"]),
-            first_update_id=int(data["U"]),
-            final_update_id=int(data["u"]),
+            event_time_ms=_required_json_int(data, "E"),
+            first_update_id=_required_json_int(data, "U"),
+            final_update_id=_required_json_int(data, "u"),
             bids=parse_levels(data["b"]),
             asks=parse_levels(data["a"]),
         )
     if event_type == "aggTrade":
         return symbol, Trade(
             receipt_timestamp_ns=receipt_timestamp_ns,
-            event_time_ms=int(data["E"]),
-            aggregate_trade_id=int(data["a"]),
+            event_time_ms=_required_json_int(data, "E"),
+            aggregate_trade_id=_required_json_int(data, "a"),
             price=parse_price(data["p"]),
             quantity=parse_quantity(data["q"]),
-            buyer_is_maker=bool(data["m"]),
+            buyer_is_maker=_required_json_bool(data, "m"),
         )
     raise ValueError(f"Unsupported stream event type: {event_type!r}")
 
@@ -103,7 +121,7 @@ def fetch_snapshot(symbol: str, *, limit: int = 5_000, timeout_seconds: float = 
         raise RuntimeError(f"Snapshot endpoint returned an error: {payload!r}")
     return Snapshot(
         receipt_timestamp_ns=monotonic_ns(),
-        last_update_id=int(payload["lastUpdateId"]),
+        last_update_id=_required_json_int(payload, "lastUpdateId"),
         bids=parse_levels(payload.get("bids", ())),
         asks=parse_levels(payload.get("asks", ())),
     )

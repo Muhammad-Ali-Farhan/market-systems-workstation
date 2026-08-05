@@ -30,6 +30,10 @@ class Level:
     quantity: int
 
     def __post_init__(self) -> None:
+        if isinstance(self.price, bool) or not isinstance(self.price, int):
+            raise TypeError("L2 price must be an integer.")
+        if isinstance(self.quantity, bool) or not isinstance(self.quantity, int):
+            raise TypeError("L2 quantity must be an integer.")
         if self.price <= 0 or self.price > INT64_MAX:
             raise ValueError("L2 price must be a positive signed 64-bit integer.")
         if self.quantity < 0 or self.quantity > UINT64_MAX:

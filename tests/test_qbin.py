@@ -155,3 +155,46 @@ def test_sidecar_market_identity_must_match(tmp_path: Path) -> None:
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RuntimeError, match="symbol"):
         read_metadata(path)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("schema_version", "1"),
+        ("created_unix_ns", 1.7e18),
+        ("accepted_records", "10"),
+        ("recorded_update_ids", 10.0),
+    ],
+)
+def test_sidecar_integer_fields_do_not_coerce_other_types(
+    tmp_path: Path,
+    key: str,
+    value: object,
+) -> None:
+    path = write_qbin(tmp_path / f"strict-{key}.qbin", synthetic_records(10))
+    sidecar_path = Path(f"{path}.meta.json")
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    payload[key] = value
+    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="integer"):
+        read_metadata(path)
+
+
+def test_sidecar_boundary_index_must_be_an_integer(tmp_path: Path) -> None:
+    path = write_qbin(tmp_path / "boundary-type.qbin", synthetic_records(10))
+    sidecar_path = Path(f"{path}.meta.json")
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    payload["boundaries"] = [{"record_index": "0", "kind": "connection_start"}]
+    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="boundary"):
+        read_metadata(path)
+
+
+def test_nonzero_reserved_header_fields_are_rejected(tmp_path: Path) -> None:
+    path = write_qbin(tmp_path / "reserved.qbin", synthetic_records(10))
+    payload = bytearray(path.read_bytes())
+    # The first reserved uint64 starts at byte 40 in the 64-byte header.
+    payload[40:48] = (1).to_bytes(8, "little")
+    path.write_bytes(payload)
+    with pytest.raises(RuntimeError, match="reserved header"):
+        read_metadata(path)
