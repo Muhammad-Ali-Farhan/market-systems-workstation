@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from l2_capture import parse_stream_message
+from l2_capture import ReconnectBackoff, parse_stream_message
 from l2book import DepthUpdate, Trade
 
 
@@ -156,3 +156,79 @@ def test_aggregate_trade_maker_flag_must_be_boolean() -> None:
     )
     with pytest.raises(ValueError, match="'m'.*boolean"):
         parse_stream_message(raw, 999)
+
+
+def test_reconnect_backoff_resets_after_successful_open() -> None:
+    backoff = ReconnectBackoff(initial_delay_seconds=0.5, maximum_delay_seconds=2.0)
+    assert backoff.consume() == 0.5
+    assert backoff.consume() == 1.0
+    assert backoff.consume() == 2.0
+    backoff.reset()
+    assert backoff.consume() == 0.5
+
+
+def test_stream_client_resets_backoff_when_connection_opens(monkeypatch) -> None:
+    import queue
+    import sys
+    from types import SimpleNamespace
+
+    import l2_capture
+    from l2_capture import CombinedStreamClient
+
+    observed_delays: list[float] = []
+
+    class SpyBackoff:
+        def __init__(self) -> None:
+            self.inner = ReconnectBackoff(
+                initial_delay_seconds=0.5,
+                maximum_delay_seconds=2.0,
+            )
+
+        def consume(self) -> float:
+            delay = self.inner.consume()
+            observed_delays.append(delay)
+            return delay
+
+        def reset(self) -> None:
+            self.inner.reset()
+
+    monkeypatch.setattr(l2_capture, "ReconnectBackoff", SpyBackoff)
+
+    client = CombinedStreamClient(
+        ("BTCUSDT",),
+        queue.Queue(),
+        queue_drop_callback=lambda: None,
+    )
+    runs = 0
+
+    class FakeWebSocketApp:
+        def __init__(self, _target, *, on_open, on_message, on_error, on_close) -> None:
+            self.on_open = on_open
+            self.on_message = on_message
+            self.on_error = on_error
+            self.on_close = on_close
+
+        def run_forever(self, **_kwargs) -> None:
+            nonlocal runs
+            runs += 1
+            if runs == 3:
+                self.on_open(self)
+            if runs == 4:
+                client.stop_event.set()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "websocket",
+        SimpleNamespace(WebSocketApp=FakeWebSocketApp),
+    )
+    clock = iter(float(value) for value in range(0, 1000, 100))
+    monkeypatch.setattr(l2_capture.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(l2_capture.time, "sleep", lambda _seconds: None)
+
+    client.run()
+
+    assert runs == 4
+    assert observed_delays == [0.5, 1.0, 0.5]

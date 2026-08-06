@@ -46,3 +46,7 @@ After editing:
 3. Rebuild the native extension when C++ bindings change.
 4. Run CTest and the workstation verifier.
 5. Update design documentation when behavior or failure semantics change.
+
+## Version policy
+
+`project_version.py` defines the runtime version and HTTP User-Agent. The same public version must appear in `pyproject.toml`, `CMakeLists.txt`, and `vcpkg.json`; `tests/test_quality_policy.py` enforces that contract. Schema versions for binary formats, models, and reports remain independent and change only when their compatibility contract changes.

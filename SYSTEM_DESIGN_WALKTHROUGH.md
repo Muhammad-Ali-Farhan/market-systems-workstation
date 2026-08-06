@@ -17,7 +17,7 @@ The bridge condition prevents an off-by-one error in which the first post-snapsh
 
 ## 2. Exact price-level identity
 
-Price and quantity values are parsed into unsigned 64-bit fixed-point integers with eight decimal places. Floating point is avoided for book keys because decimal exchange prices that look equal can have different binary floating-point representations.
+Price values are parsed into signed 64-bit fixed-point integers and quantities into unsigned 64-bit fixed-point integers, both with eight decimal places. Floating point is avoided for book keys because decimal exchange prices that look equal can have different binary floating-point representations.
 
 The parser rejects:
 

@@ -77,3 +77,15 @@ The 32-byte top-of-book ABI and qbin v1 remain unchanged. Variable-length L2 sna
 ## Fills are sensitivity, not fact
 
 The default passive model requires observed aggregate trades. Depth-depletion models are named and reported as sensitivity assumptions. No output may describe estimated queue position as exchange truth.
+
+## Execution sensitivity is provenance-bound
+
+A sensitivity run must include the L2 research report that produced its prediction CSV. The report hash, prediction hash, held-out session IDs, recording hashes, checkpoint hashes, and symbol are verified before simulation. A manually remapped session cannot silently become new evidence.
+
+## Overwrite publication is transactional
+
+Top-of-book research artifacts are fully staged first. When explicit overwrite is enabled, every previous destination is moved to a same-directory backup before any new artifact is published. A partial publication failure removes new files and restores the complete prior set; the report remains the final commit marker.
+
+## Public version and schema versions are separate
+
+The application version is shared by the Python package, CMake project, vcpkg manifest, and runtime User-Agent and is enforced by tests. Binary-format, feature, model, and report schema versions remain independent compatibility contracts.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import tokenize
 import tomllib
 from pathlib import Path
@@ -77,3 +79,37 @@ def test_architecture_documents_both_market_data_paths() -> None:
     assert "top-of-book path" in architecture
     assert "sequence-correct Level-2 path" in architecture
     assert "not an L2 reconstruction engine" not in architecture
+
+
+def test_public_version_metadata_is_consistent() -> None:
+    from project_version import PROJECT_VERSION, PROJECT_USER_AGENT
+
+    with (ROOT / "pyproject.toml").open("rb") as stream:
+        python_project = tomllib.load(stream)
+    vcpkg = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
+    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    match = re.search(
+        r"project\(market_systems_workstation VERSION ([0-9]+\.[0-9]+\.[0-9]+)",
+        cmake,
+    )
+
+    assert match is not None
+    assert python_project["project"]["version"] == PROJECT_VERSION
+    assert vcpkg["version-semver"] == PROJECT_VERSION
+    assert match.group(1) == PROJECT_VERSION
+    assert PROJECT_USER_AGENT == f"market-systems-workstation/{PROJECT_VERSION}"
+
+    capture_source = (ROOT / "l2_capture.py").read_text(encoding="utf-8")
+    assert "headers={\"User-Agent\": PROJECT_USER_AGENT}" in capture_source
+    assert "market-systems-workstation/4.0" not in capture_source
+
+
+def test_public_documents_match_current_repository_state() -> None:
+    setup = (ROOT / "REPOSITORY_SETUP.md").read_text(encoding="utf-8")
+    walkthrough = (ROOT / "SYSTEM_DESIGN_WALKTHROUGH.md").read_text(encoding="utf-8")
+
+    assert "This repository is already public and initialized." in setup
+    assert "git init" in setup
+    assert "Do not run `git init` again" in setup
+    assert "signed 64-bit fixed-point integers" in walkthrough
+    assert "quantities into unsigned 64-bit fixed-point integers" in walkthrough

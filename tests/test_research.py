@@ -236,3 +236,81 @@ def test_holdout_reuse_detected_when_earlier_training_session_is_added(
 
     assert first["provenance"]["test_period_fingerprint"]
 
+
+
+def test_overwrite_failure_restores_all_prior_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import os
+    import research
+
+    recordings = [
+        write_qbin(
+            tmp_path / f"rollback-session-{index}.qbin",
+            synthetic_records(
+                650,
+                seed=700 + index,
+                start_timestamp_ns=1_000_000_000 + index * 100_000_000_000,
+            ),
+            created_unix_ns=2_000_000_000_000_000_000 + index,
+        )
+        for index in range(4)
+    ]
+    model_path = tmp_path / "model.npz"
+    report_path = tmp_path / "report.json"
+    predictions_path = tmp_path / "predictions.csv"
+    evidence_path = tmp_path / "evidence.md"
+
+    train_and_evaluate(
+        recordings,
+        horizon=10,
+        fee_bps_per_side=0.01,
+        model_path=model_path,
+        report_path=report_path,
+        predictions_path=predictions_path,
+        evidence_path=evidence_path,
+        diagnostic_resamples=100,
+    )
+    original = {
+        path: path.read_bytes()
+        for path in (model_path, predictions_path, evidence_path, report_path)
+    }
+
+    real_replace = os.replace
+    injected = False
+
+    def fail_during_prediction_publication(source, destination) -> None:
+        nonlocal injected
+        source_path = Path(source)
+        destination_path = Path(destination)
+        if (
+            not injected
+            and destination_path == predictions_path
+            and source_path.name.endswith(".tmp.csv")
+        ):
+            injected = True
+            raise OSError("injected publication failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(research.os, "replace", fail_during_prediction_publication)
+    import pytest
+
+    with pytest.raises(OSError, match="injected publication failure"):
+        train_and_evaluate(
+            recordings,
+            horizon=10,
+            fee_bps_per_side=0.01,
+            model_path=model_path,
+            report_path=report_path,
+            predictions_path=predictions_path,
+            evidence_path=evidence_path,
+            diagnostic_resamples=100,
+            overwrite=True,
+            allow_test_reuse=True,
+        )
+
+    assert injected is True
+    assert all(path.read_bytes() == expected for path, expected in original.items())
+    assert not list(tmp_path.glob(".*.tmp*"))
+    assert not list(tmp_path.glob(".*.backup"))

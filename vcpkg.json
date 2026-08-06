@@ -1,8 +1,7 @@
-
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "market-systems-engine",
-  "version-semver": "2.0.0",
+  "version-semver": "1.0.0",
   "builtin-baseline": "2475cc332a47b3a63bb3de58293bdab7726613ca",
   "dependencies": [
     "boost-asio",
@@ -12,4 +11,3 @@
     "simdjson"
   ]
 }
-

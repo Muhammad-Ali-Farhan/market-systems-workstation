@@ -30,6 +30,10 @@ Three explicit sensitivity modes exist:
 
 Depth decreases are ambiguous because aggregated feeds do not identify cancellations versus executions. Results must be presented across models, never as exact fills.
 
+## Provenance gate
+
+Execution-sensitivity analysis requires the originating L2 research report. Before replay, the tool verifies the prediction artifact hash and checks each held-out session against the exact recording hash, checkpoint-sidecar hash, and symbol recorded by the experiment. Session mappings that are missing, extra, or content-mismatched are rejected.
+
 ## Accounting
 
 - Buy fills reduce cash and increase inventory.

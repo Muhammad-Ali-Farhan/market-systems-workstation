@@ -227,9 +227,12 @@ $sessions = Get-ChildItem recordings\l2\btcusdt-*.l2bin |
 
 ### Replay held-out signals through execution assumptions
 
+The research report is mandatory. It binds the prediction CSV and each held-out session ID to the exact recording and checkpoint hashes used by the experiment.
+
 ```powershell
 .\.venv\Scripts\python.exe l2_execution_sensitivity.py `
   artifacts/l2/l2_h20_test_predictions.csv `
+  --research-report artifacts/l2/l2_h20_report.json `
   --recording 0=recordings/l2/session-a.l2bin `
   --recording 1=recordings/l2/session-b.l2bin `
   --style passive `

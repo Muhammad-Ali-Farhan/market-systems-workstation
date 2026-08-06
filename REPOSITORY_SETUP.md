@@ -1,30 +1,29 @@
-# Repository setup
+# Repository maintenance
 
-Recommended GitHub settings:
+This repository is already public and initialized. Do not run `git init` again, fabricate earlier commits, or force-push `main` to rewrite the published history.
 
-- **Repository name:** `market-systems-workstation`
-- **Description:** `C++20/Python platform for sequence-correct L2 market data, deterministic replay, execution simulation, and microstructure analysis.`
-- **Visibility:** Public
-- **License:** MIT
-- **Topics:** `cpp`, `python`, `market-data`, `order-book`, `websocket`, `concurrency`, `deterministic-replay`, `pybind11`, `microstructure`, `cmake`, `testing`
+## Before each push
 
-## First push
-
-Create a new empty GitHub repository without adding a README, license, or `.gitignore`, then run from this folder:
+Run from the repository root:
 
 ```powershell
-git init
-git add .
-git commit -m "Initial public release"
-git branch -M main
-git remote add origin <repository-url>
-git push -u origin main
+python -m ruff check .
+python -m pytest
+git diff --check
 ```
 
-Do not manufacture earlier commits. Keep later commits focused and descriptive.
+For native or build-system changes, also run `BUILD_NATIVE.ps1` on Windows and confirm the GitHub Actions matrix is green after the push.
 
-## Do not push
+## Commit discipline
 
-The `.gitignore` excludes local environments, native builds, recordings, generated reports, logs, compiled modules, and release archives. Do not force-add those files.
+- Keep each commit focused on one correctness, testing, documentation, or build concern.
+- Use descriptive imperative messages.
+- Inspect `git status` and `git diff` before staging.
+- Stage explicit files instead of using `git add -f`.
+- Never manufacture development history; design evolution is documented in `DECISIONS.md` and `CHANGELOG.md`.
 
-A portable Windows build may be uploaded later as a **GitHub Release asset**. It should not be committed into the source repository.
+## Do not commit
+
+The `.gitignore` excludes local environments, native builds, recordings, generated reports, logs, compiled modules, and release archives. Do not override those exclusions.
+
+Portable Windows packages belong in GitHub Releases, not in the source tree.

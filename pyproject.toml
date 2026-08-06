@@ -55,6 +55,7 @@ py-modules = [
   "capture_session",
   "microstructure",
   "native_runtime",
+  "project_version",
   "qbin",
   "market_workstation",
   "recording_info",

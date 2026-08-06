@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bound execution-sensitivity runs to the exact research report, prediction hash, held-out session IDs, recording hashes, and checkpoint hashes.
+- Made top-of-book research overwrite publication restore every prior artifact after a partial commit failure.
+- Reset WebSocket reconnect backoff after a confirmed successful connection.
+- Unified the public runtime, Python, CMake, and vcpkg version at `1.0.0` and added an executable consistency policy.
+- Corrected fixed-point type documentation and replaced obsolete first-push instructions with repository maintenance guidance.
 - Fixed Python lint annotations and selected the MSVC toolchain explicitly in Windows CI.
 - Made the local Windows native build activate x64 MSVC and use Ninja deterministically.
 - Updated the architecture document to describe both top-of-book and sequence-correct L2 paths.

@@ -1216,6 +1216,77 @@ def save_predictions(
             )
 
 
+def _publish_staged_artifacts(
+    commit_pairs: Sequence[tuple[Path, Path]],
+    *,
+    overwrite: bool,
+) -> None:
+    if not commit_pairs:
+        return
+    destinations = [destination for _, destination in commit_pairs]
+    if len({path.resolve() for path in destinations}) != len(destinations):
+        raise ValueError("Artifact destinations must be distinct.")
+    missing_sources = [source for source, _ in commit_pairs if not source.is_file()]
+    if missing_sources:
+        joined = "\n".join(f"  {path}" for path in missing_sources)
+        raise FileNotFoundError("Staged research artifacts are missing:\n" + joined)
+
+    backups: list[tuple[Path, Path]] = []
+    committed: list[Path] = []
+    try:
+        if overwrite:
+            for _, destination in commit_pairs:
+                if not destination.exists():
+                    continue
+                descriptor, backup_name = tempfile.mkstemp(
+                    prefix=f".{destination.name}.",
+                    suffix=".backup",
+                    dir=destination.parent,
+                )
+                os.close(descriptor)
+                backup = Path(backup_name)
+                try:
+                    os.replace(destination, backup)
+                except Exception:
+                    backup.unlink(missing_ok=True)
+                    raise
+                backups.append((destination, backup))
+        elif any(destination.exists() for destination in destinations):
+            appeared = [destination for destination in destinations if destination.exists()]
+            joined = "\n".join(f"  {path}" for path in appeared)
+            raise FileExistsError(
+                "Research artifacts appeared during training; refusing to overwrite them:\n"
+                + joined
+            )
+
+        for source, destination in commit_pairs:
+            os.replace(source, destination)
+            committed.append(destination)
+    except Exception as publication_error:
+        rollback_errors: list[str] = []
+        for destination in reversed(committed):
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as exception:
+                rollback_errors.append(f"remove {destination}: {exception}")
+        for destination, backup in reversed(backups):
+            if not backup.exists():
+                continue
+            try:
+                os.replace(backup, destination)
+            except OSError as exception:
+                rollback_errors.append(f"restore {destination}: {exception}")
+        if rollback_errors:
+            raise RuntimeError(
+                "Research artifact publication failed and rollback was incomplete:\n  "
+                + "\n  ".join(rollback_errors)
+            ) from publication_error
+        raise
+    else:
+        for _, backup in backups:
+            backup.unlink(missing_ok=True)
+
+
 def train_and_evaluate(
     recording_paths: Sequence[str | Path],
     *,
@@ -1636,18 +1707,8 @@ def train_and_evaluate(
             encoding="utf-8",
         )
 
-        if not overwrite:
-            raced = [path for path in output_tuple if path.exists()]
-            if raced:
-                joined = "\n".join(f"  {path}" for path in raced)
-                raise FileExistsError(
-                    "Research artifacts appeared during training; refusing to "
-                    "overwrite them:\n" + joined
-                )
-
         # All files are completely staged before publication. The JSON report
         # is committed last, so report discovery never exposes a partial set.
-        committed: list[Path] = []
         commit_pairs: list[tuple[Path, Path]] = [
             (model_temporary, Path(model_path)),
             (predictions_temporary, Path(predictions_path)),
@@ -1655,14 +1716,7 @@ def train_and_evaluate(
         if evidence_temporary is not None and evidence_path is not None:
             commit_pairs.append((evidence_temporary, Path(evidence_path)))
         commit_pairs.append((report_temporary, Path(report_path)))
-        try:
-            for source, destination in commit_pairs:
-                os.replace(source, destination)
-                committed.append(destination)
-        except Exception:
-            for destination in reversed(committed):
-                destination.unlink(missing_ok=True)
-            raise
+        _publish_staged_artifacts(commit_pairs, overwrite=overwrite)
     finally:
         for temporary in temporary_paths:
             temporary.unlink(missing_ok=True)

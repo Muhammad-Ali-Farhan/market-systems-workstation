@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
+from l2_execution_sensitivity import load_prediction_orders, verify_research_provenance
 from l2_features import FEATURE_NAMES, FEATURE_SCHEMA_HASH, FEATURE_SCHEMA_VERSION, build_feature_set
 from l2_research import run_experiment
 from l2bin import Boundary, BoundaryReason, L2Writer, sha256_file
@@ -113,6 +114,18 @@ def test_l2_feature_schema_and_research_pipeline(tmp_path: Path) -> None:
     assert report["artifacts"]["model"]["sha256"] == sha256_file(model_path)
     assert report["artifacts"]["predictions"]["sha256"] == sha256_file(predictions_path)
     assert report["artifacts"]["research_card"]["sha256"] == sha256_file(card_path)
+    test_recordings = {
+        int(session_id): recordings[int(session_id)]
+        for session_id in report["split"]["test_sessions"]
+    }
+    provenance = verify_research_provenance(
+        report_path,
+        predictions_path,
+        test_recordings,
+        load_prediction_orders(predictions_path),
+    )
+    assert provenance.prediction_sha256 == sha256_file(predictions_path)
+    assert set(provenance.recordings) == set(test_recordings)
     with np.load(model_path, allow_pickle=False) as archive:
         assert int(archive["schema_version"]) == 2
         assert int(archive["feature_schema_version"]) == FEATURE_SCHEMA_VERSION

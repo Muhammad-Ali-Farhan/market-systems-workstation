@@ -17,6 +17,7 @@ from typing import Callable
 import certifi
 
 from l2bin import Boundary, BoundaryReason, L2Writer
+from project_version import PROJECT_USER_AGENT
 from l2book import (
     ApplyResult,
     DepthSynchronizer,
@@ -105,7 +106,7 @@ def fetch_snapshot(symbol: str, *, limit: int = 5_000, timeout_seconds: float = 
     url = f"https://api.binance.com/api/v3/depth?{query}"
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "market-systems-workstation/4.0"},
+        headers={"User-Agent": PROJECT_USER_AGENT},
         method="GET",
     )
     context = ssl.create_default_context(cafile=certifi.where())
@@ -125,6 +126,39 @@ def fetch_snapshot(symbol: str, *, limit: int = 5_000, timeout_seconds: float = 
         bids=parse_levels(payload.get("bids", ())),
         asks=parse_levels(payload.get("asks", ())),
     )
+
+
+@dataclass(slots=True)
+class ReconnectBackoff:
+    initial_delay_seconds: float = 0.5
+    maximum_delay_seconds: float = 10.0
+    current_delay_seconds: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.initial_delay_seconds)
+            or self.initial_delay_seconds <= 0.0
+        ):
+            raise ValueError("Initial reconnect delay must be finite and positive.")
+        if (
+            not math.isfinite(self.maximum_delay_seconds)
+            or self.maximum_delay_seconds < self.initial_delay_seconds
+        ):
+            raise ValueError(
+                "Maximum reconnect delay must be finite and no smaller than the initial delay."
+            )
+        self.current_delay_seconds = self.initial_delay_seconds
+
+    def consume(self) -> float:
+        delay = self.current_delay_seconds
+        self.current_delay_seconds = min(
+            self.current_delay_seconds * 2.0,
+            self.maximum_delay_seconds,
+        )
+        return delay
+
+    def reset(self) -> None:
+        self.current_delay_seconds = self.initial_delay_seconds
 
 
 class CombinedStreamClient(threading.Thread):
@@ -175,12 +209,13 @@ class CombinedStreamClient(threading.Thread):
             for name in (f"{symbol.lower()}@depth@100ms", f"{symbol.lower()}@aggTrade")
         ]
         target = "wss://stream.binance.com:9443/stream?streams=" + "/".join(stream_names)
-        reconnect_delay = 0.5
+        reconnect_backoff = ReconnectBackoff()
         while not self.stop_event.is_set():
             self.generation += 1
             generation = self.generation
 
             def on_open(_ws) -> None:
+                reconnect_backoff.reset()
                 self._emit(
                     None,
                     ConnectionBoundary(monotonic_ns(), generation, True),
@@ -227,10 +262,10 @@ class CombinedStreamClient(threading.Thread):
             self._websocket = None
             if self.stop_event.is_set():
                 break
+            reconnect_delay = reconnect_backoff.consume()
             deadline = time.monotonic() + reconnect_delay
             while time.monotonic() < deadline and not self.stop_event.is_set():
                 time.sleep(0.05)
-            reconnect_delay = min(reconnect_delay * 2.0, 10.0)
 
 
 @dataclass(slots=True)
