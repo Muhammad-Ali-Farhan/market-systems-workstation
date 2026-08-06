@@ -16,7 +16,11 @@ The simulator tests whether held-out signals remain plausible after market inter
 
 ## Market orders
 
-A market order sweeps current visible levels in price priority. Consumed quantity is shadowed until the next snapshot/depth update so two simulated orders cannot reuse the same displayed liquidity.
+A market order sweeps current visible levels in price priority. Consumed quantity is shadowed per side and price. A snapshot resets all shadow state; a depth update resets only the levels it explicitly refreshes. An unrelated update cannot make previously consumed displayed liquidity available again.
+
+## Event ordering
+
+Order arrivals, cancellation arrivals, and expirations share one chronological control timeline. Controls strictly earlier than a recorded market event observe the pre-event book. An exact market/control timestamp tie applies the recorded market event first. An exact order/cancel arrival tie applies the order first and then the cancellation. Fills carry the simulated arrival timestamp rather than the timestamp of the next market-data event.
 
 ## Passive orders
 

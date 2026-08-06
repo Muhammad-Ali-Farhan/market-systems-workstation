@@ -111,7 +111,9 @@ def _read_sidecar(path: Path, record_count: int) -> tuple[Path | None, dict[str,
     try:
         payload = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exception:
-        raise RuntimeError(f"Could not read recording sidecar {sidecar}: {exception}") from exception
+        raise RuntimeError(
+            f"Could not read recording sidecar {sidecar}: {exception}"
+        ) from exception
 
     if not isinstance(payload, dict):
         raise RuntimeError(f"Recording sidecar must contain a JSON object: {sidecar}")
@@ -268,6 +270,8 @@ def read_metadata(file_path: str | Path) -> RecordingMetadata:
         raise RuntimeError(f"Unsupported recording flags in {path}: {flags}")
     if volume_scale != EXPECTED_VOLUME_SCALE:
         raise RuntimeError(f"Unexpected volume scale in {path}: {volume_scale}")
+    if created_unix_ns == 0:
+        raise RuntimeError(f"Recording creation timestamp cannot be zero: {path}")
     if any((reserved_1, reserved_2, reserved_3)):
         raise RuntimeError(f"Unsupported nonzero reserved header fields in {path}.")
 

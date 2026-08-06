@@ -89,3 +89,19 @@ Top-of-book research artifacts are fully staged first. When explicit overwrite i
 ## Public version and schema versions are separate
 
 The application version is shared by the Python package, CMake project, vcpkg manifest, and runtime User-Agent and is enforced by tests. Binary-format, feature, model, and report schema versions remain independent compatibility contracts.
+
+## Snapshot identity is retained until a bridge exists
+
+A REST snapshot that covers all currently buffered depth events is kept as the pending synchronization baseline. Later queued events are tested against that same snapshot before another REST request is made. This prevents a synchronous capture loop from repeatedly fetching a snapshot that remains ahead of the single event currently inside the synchronizer.
+
+## Local controls use one chronological timeline
+
+Order arrivals, cancellation arrivals, and TTL expirations are merged by simulated venue-arrival timestamp. Recorded market data wins exact market/control ties; order arrival wins an exact order/cancel tie. This policy is deterministic, documented, and tested rather than emerging from separate processing loops.
+
+## Displayed-liquidity shadowing is price-level scoped
+
+Taker fills shadow consumed quantity by side and price. A snapshot resets the full shadow state, while a depth update resets only explicitly refreshed levels. This avoids reusing unchanged ask liquidity merely because an unrelated bid level changed.
+
+## Binary reserved fields remain strict
+
+Current readers reject zero creation timestamps, nonzero reserved header fields, and missing or malformed finalized-artifact hashes. Reserved bytes are compatibility space, not an invitation to silently accept unknown semantics.

@@ -534,12 +534,18 @@ def _read_header(stream: BinaryIO) -> tuple[str, int]:
         raise RuntimeError("L2 level layout does not match this reader.")
     if price_scale != PRICE_SCALE or quantity_scale != QUANTITY_SCALE:
         raise RuntimeError("L2 fixed-point scales do not match this reader.")
+    if created_unix_ns == 0:
+        raise RuntimeError("L2 binary creation timestamp cannot be zero.")
     if any(reserved):
         raise RuntimeError("L2 binary header contains unsupported flags.")
     return _decode_symbol(symbol_raw), created_unix_ns
 
 
-def _read_levels(payload: bytes, bid_count: int, ask_count: int) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
+def _read_levels(
+    payload: bytes,
+    bid_count: int,
+    ask_count: int,
+) -> tuple[tuple[Level, ...], tuple[Level, ...]]:
     expected = (bid_count + ask_count) * LEVEL_SIZE
     if len(payload) != expected:
         raise RuntimeError("L2 event payload size does not match its level counts.")
@@ -646,13 +652,23 @@ def iter_events(path: str | Path) -> Iterator[L2Event]:
                 yield Boundary(receipt, reason)
 
 
-def read_checkpoints(path: str | Path, expected_created_unix_ns: int | None = None) -> tuple[Checkpoint, ...]:
+def read_checkpoints(
+    path: str | Path,
+    expected_created_unix_ns: int | None = None,
+) -> tuple[Checkpoint, ...]:
     checkpoint_path = Path(path)
     with checkpoint_path.open("rb") as stream:
         header = stream.read(CHECKPOINT_HEADER_SIZE)
         if len(header) != CHECKPOINT_HEADER_SIZE:
             raise RuntimeError("L2 checkpoint file has a truncated header.")
-        magic, version, header_size, record_size, flags, created = CHECKPOINT_HEADER_STRUCT.unpack(header)
+        (
+            magic,
+            version,
+            header_size,
+            record_size,
+            flags,
+            created,
+        ) = CHECKPOINT_HEADER_STRUCT.unpack(header)
         if (
             magic != CHECKPOINT_MAGIC
             or version != VERSION
@@ -688,6 +704,8 @@ def read_metadata(path: str | Path, *, verify_hashes: bool = False) -> L2Metadat
     sidecar_path = Path(f"{file_path}.meta.json")
     conventional_checkpoint = Path(f"{file_path}.l2chk")
     sidecar: dict[str, object] = {}
+    expected_recording_hash: str | None = None
+    expected_checkpoint_hash: str | None = None
     inferred_incomplete = False
     if sidecar_path.exists():
         try:
@@ -715,6 +733,12 @@ def read_metadata(path: str | Path, *, verify_hashes: bool = False) -> L2Metadat
             raise RuntimeError("L2 sidecar price scale does not match the binary file.")
         if _required_int(sidecar, "quantity_scale", minimum=1) != QUANTITY_SCALE:
             raise RuntimeError("L2 sidecar quantity scale does not match the binary file.")
+        expected_recording_hash = _required_string(sidecar, "sha256")
+        expected_checkpoint_hash = _required_string(sidecar, "checkpoint_sha256")
+        if re.fullmatch(r"[0-9a-f]{64}", expected_recording_hash) is None:
+            raise RuntimeError("L2 sidecar recording SHA-256 is malformed.")
+        if re.fullmatch(r"[0-9a-f]{64}", expected_checkpoint_hash) is None:
+            raise RuntimeError("L2 sidecar checkpoint SHA-256 is malformed.")
     else:
         # Version 1 has never had a legacy sidecar-free completed form. Any
         # .l2bin without its atomically published sidecar is therefore an
@@ -818,10 +842,10 @@ def read_metadata(path: str | Path, *, verify_hashes: bool = False) -> L2Metadat
         malformed_messages = None
 
     if verify_hashes and sidecar:
-        expected_recording_hash = _required_string(sidecar, "sha256")
+        assert expected_recording_hash is not None
+        assert expected_checkpoint_hash is not None
         if sha256_file(file_path) != expected_recording_hash:
             raise RuntimeError("L2 recording SHA-256 does not match its sidecar.")
-        expected_checkpoint_hash = _required_string(sidecar, "checkpoint_sha256")
         if checkpoint_path is None or sha256_file(checkpoint_path) != expected_checkpoint_hash:
             raise RuntimeError("L2 checkpoint SHA-256 does not match its sidecar.")
 
@@ -840,8 +864,8 @@ def read_metadata(path: str | Path, *, verify_hashes: bool = False) -> L2Metadat
         final_update_id=final_update_id,
         final_state_hash=final_state_hash,
         sidecar_path=(sidecar_path if sidecar else None),
-        sha256=(str(sidecar["sha256"]) if sidecar else None),
-        checkpoint_sha256=(str(sidecar["checkpoint_sha256"]) if sidecar else None),
+        sha256=expected_recording_hash,
+        checkpoint_sha256=expected_checkpoint_hash,
         sequence_gaps=sequence_gaps,
         snapshot_retries=snapshot_retries,
         queue_drops=queue_drops,

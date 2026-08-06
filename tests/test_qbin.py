@@ -198,3 +198,13 @@ def test_nonzero_reserved_header_fields_are_rejected(tmp_path: Path) -> None:
     path.write_bytes(payload)
     with pytest.raises(RuntimeError, match="reserved header"):
         read_metadata(path)
+
+
+def test_zero_binary_creation_timestamp_is_rejected(tmp_path: Path) -> None:
+    path = write_qbin(tmp_path / "zero-created.qbin", synthetic_records(10))
+    payload = bytearray(path.read_bytes())
+    # created_unix_ns occupies bytes 32..39 in the 64-byte header.
+    payload[32:40] = (0).to_bytes(8, "little")
+    path.write_bytes(payload)
+    with pytest.raises(RuntimeError, match="timestamp cannot be zero"):
+        read_metadata(path)

@@ -50,3 +50,7 @@ After editing:
 ## Version policy
 
 `project_version.py` defines the runtime version and HTTP User-Agent. The same public version must appear in `pyproject.toml`, `CMakeLists.txt`, and `vcpkg.json`; `tests/test_quality_policy.py` enforces that contract. Schema versions for binary formats, models, and reports remain independent and change only when their compatibility contract changes.
+
+## Line endings
+
+`.gitattributes` keeps source and documentation files in LF form across platforms while preserving CRLF for Windows batch files. Do not override the repository attributes with manual whole-tree conversion.

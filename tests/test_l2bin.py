@@ -187,3 +187,37 @@ def test_final_checkpoint_must_match_final_state(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="Final checkpoint"):
         writer.finalize(final_update_id=book.last_update_id, final_state_hash=book.state_hash() + 1)
     writer.abort()
+
+
+def test_zero_l2_creation_timestamp_is_rejected(tmp_path: Path) -> None:
+    path = create_recording(tmp_path / "zero-created.l2bin")
+    payload = bytearray(path.read_bytes())
+    # created_unix_ns occupies bytes 40..47 in the 128-byte L2 header.
+    payload[40:48] = (0).to_bytes(8, "little")
+    path.write_bytes(payload)
+    with pytest.raises(RuntimeError, match="timestamp cannot be zero"):
+        read_metadata(path)
+
+
+@pytest.mark.parametrize("field", ["sha256", "checkpoint_sha256"])
+def test_current_l2_sidecar_requires_well_formed_hashes(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    import json
+
+    path = create_recording(tmp_path / f"missing-{field}.l2bin")
+    sidecar = Path(f"{path}.meta.json")
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload.pop(field)
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match=field):
+        read_metadata(path)
+
+    path = create_recording(tmp_path / f"malformed-{field}.l2bin")
+    sidecar = Path(f"{path}.meta.json")
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload[field] = "not-a-sha256"
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="SHA-256 is malformed"):
+        read_metadata(path)

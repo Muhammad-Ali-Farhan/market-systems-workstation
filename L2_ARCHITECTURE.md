@@ -48,6 +48,7 @@ A connection boundary clears book and feature state. A sequence gap is recorded 
 - Bounded cross-thread event queue.
 - Verified TLS using the certifi CA bundle.
 - REST snapshots with bounded timeout.
+- A fetched snapshot is retained while awaiting its bridge event; queued depth events are tested against that same snapshot before another REST request is made.
 - Atomic sidecar finalization.
 - Capture failures still close and finalize artifacts as incomplete.
 

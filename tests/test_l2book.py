@@ -122,3 +122,19 @@ def test_l2_levels_reject_boolean_scalars() -> None:
         Level(True, 1)
     with pytest.raises(TypeError, match="quantity must be an integer"):
         Level(10_000, False)
+
+
+def test_synchronizer_buffer_capacity_type_is_strict() -> None:
+    with pytest.raises(TypeError, match="must be an integer"):
+        DepthSynchronizer(True)
+    with pytest.raises(TypeError, match="must be an integer"):
+        DepthSynchronizer(10.5)
+
+
+def test_quantity_lookup_rejects_coercible_prices() -> None:
+    book = L2OrderBook()
+    book.install_snapshot(snapshot())
+    with pytest.raises(TypeError, match="lookup must be an integer"):
+        book.quantity_at("bid", True)
+    with pytest.raises(TypeError, match="lookup must be an integer"):
+        book.quantity_at("bid", 10_000.5)

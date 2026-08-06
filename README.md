@@ -63,11 +63,12 @@ Detailed design documents:
 The synchronizer:
 
 1. Buffers diff-depth events before snapshot installation.
-2. Downloads a REST snapshot.
-3. Drops buffered events already covered by the snapshot.
-4. Requires the first retained event to bridge `lastUpdateId + 1`.
-5. Applies later updates only when their ranges remain continuous.
-6. Detects gaps, records a boundary, and resynchronizes.
+2. Downloads a REST snapshot while WebSocket events continue entering the bounded queue.
+3. Retains that snapshot until a later event bridges it, avoiding repeated snapshot chasing.
+4. Drops buffered events already covered by the snapshot.
+5. Requires the first retained event to bridge `lastUpdateId + 1`.
+6. Applies later updates only when their ranges remain continuous.
+7. Detects gaps, records a boundary, and resynchronizes.
 
 ### Deterministic recording and replay
 

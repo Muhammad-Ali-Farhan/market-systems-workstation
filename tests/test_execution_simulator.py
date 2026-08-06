@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from execution_simulator import (
+    CancelRequest,
     ExecutionConfig,
     ExecutionSimulator,
     OrderRequest,
@@ -193,7 +194,7 @@ def test_order_arriving_before_market_event_uses_pre_event_book(tmp_path: Path) 
     simulator.submit(OrderRequest("m1", 1_500, Side.BUY, OrderType.MARKET, q(1.0)))
     result = simulator.run(path)
     assert result.fills[0].price == p(101.0)
-    assert result.fills[0].timestamp_ns == 2_000
+    assert result.fills[0].timestamp_ns == 1_500
 
 
 def test_exact_timestamp_tie_follows_recorded_market_event_first(tmp_path: Path) -> None:
@@ -264,3 +265,131 @@ def test_execution_simulator_rejects_hash_mismatch(tmp_path: Path) -> None:
     simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0))
     with pytest.raises(RuntimeError, match="SHA-256"):
         simulator.run(path)
+
+
+def test_cancel_arriving_before_order_wins_across_sparse_market_events(
+    tmp_path: Path,
+) -> None:
+    path = write_event_order_market(tmp_path / "cancel-before-order.l2bin")
+    simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0, cancel_latency_ns=0))
+    simulator.submit(
+        OrderRequest("l1", 1_800, Side.BUY, OrderType.LIMIT, q(1.0), p(100.0))
+    )
+    simulator.cancel(CancelRequest("l1", 1_500))
+
+    result = simulator.run(path)
+    order = next(item for item in result.orders if item.request.order_id == "l1")
+    assert order.status is OrderStatus.CANCELLED
+    assert order.rejection_reason == "cancel_arrived_before_order"
+    assert not result.fills
+
+
+def test_equal_order_and_cancel_arrival_uses_order_first_tie_break(
+    tmp_path: Path,
+) -> None:
+    path = write_event_order_market(tmp_path / "control-tie.l2bin")
+    simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0, cancel_latency_ns=0))
+    simulator.submit(
+        OrderRequest("l1", 1_500, Side.BUY, OrderType.LIMIT, q(1.0), p(100.0))
+    )
+    simulator.cancel(CancelRequest("l1", 1_500))
+
+    result = simulator.run(path)
+    order = next(item for item in result.orders if item.request.order_id == "l1")
+    assert order.status is OrderStatus.CANCELLED
+    assert order.rejection_reason == ""
+
+
+def test_passive_order_expires_before_later_market_event(tmp_path: Path) -> None:
+    path = write_market(tmp_path / "ttl.l2bin")
+    simulator = ExecutionSimulator(
+        ExecutionConfig(transmission_latency_ns=0, queue_ahead_fraction=0.0)
+    )
+    simulator.submit(
+        OrderRequest(
+            "l1",
+            1_500,
+            Side.BUY,
+            OrderType.LIMIT,
+            q(1.0),
+            p(100.0),
+            time_to_live_ns=100,
+        )
+    )
+
+    result = simulator.run(path)
+    order = next(item for item in result.orders if item.request.order_id == "l1")
+    assert order.status is OrderStatus.EXPIRED
+    assert not result.fills
+
+
+def write_unrelated_depth_refresh_market(path: Path) -> Path:
+    snapshot = Snapshot(
+        1_000,
+        100,
+        (Level(p(100.0), q(5.0)),),
+        (Level(p(101.0), q(5.0)),),
+    )
+    first = DepthUpdate(2_000, 2, 101, 101, (Level(p(100.0), q(4.0)),), ())
+    second = DepthUpdate(3_000, 3, 102, 102, (Level(p(100.0), q(3.0)),), ())
+    book = L2OrderBook()
+    writer = L2Writer(path, "BTCUSDT")
+    writer.write(snapshot)
+    book.install_snapshot(snapshot)
+    writer.write(first)
+    book.apply(first)
+    writer.write(second)
+    book.apply(second)
+    writer.write_checkpoint(book.last_update_id, book.state_hash())
+    writer.finalize(
+        final_update_id=book.last_update_id,
+        final_state_hash=book.state_hash(),
+    )
+    return path
+
+
+def test_unrelated_depth_update_does_not_restore_consumed_ask_liquidity(
+    tmp_path: Path,
+) -> None:
+    path = write_unrelated_depth_refresh_market(tmp_path / "per-level-refresh.l2bin")
+    simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0))
+    simulator.submit(OrderRequest("m1", 1_500, Side.BUY, OrderType.MARKET, q(5.0)))
+    simulator.submit(OrderRequest("m2", 2_500, Side.BUY, OrderType.MARKET, q(1.0)))
+
+    result = simulator.run(path)
+    first = next(item for item in result.orders if item.request.order_id == "m1")
+    second = next(item for item in result.orders if item.request.order_id == "m2")
+    assert first.status is OrderStatus.FILLED
+    assert second.status is OrderStatus.REJECTED
+    assert second.rejection_reason == "insufficient_visible_depth"
+    assert [fill.order_id for fill in result.fills] == ["m1"]
+
+
+def test_order_expiry_timestamp_overflow_is_rejected(tmp_path: Path) -> None:
+    path = write_event_order_market(tmp_path / "ttl-overflow.l2bin")
+    simulator = ExecutionSimulator(ExecutionConfig(transmission_latency_ns=0))
+    simulator.submit(
+        OrderRequest(
+            "l1",
+            1_500,
+            Side.BUY,
+            OrderType.LIMIT,
+            q(1.0),
+            p(100.0),
+            time_to_live_ns=(1 << 64) - 1,
+        )
+    )
+    with pytest.raises(OverflowError, match="expiry timestamp"):
+        simulator.run(path)
+
+
+def test_limit_price_must_fit_signed_64_bits() -> None:
+    with pytest.raises(ValueError, match="signed 64-bit"):
+        OrderRequest(
+            "l1",
+            1,
+            Side.BUY,
+            OrderType.LIMIT,
+            1,
+            1 << 63,
+        )

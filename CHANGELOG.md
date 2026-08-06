@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Retained an in-flight REST snapshot until a later diff-depth event bridges it, preventing live synchronization from chasing the stream with repeated newer snapshots.
+- Ordered order arrivals, cancellations, and expirations on one deterministic control timeline and timestamped fills at actual simulated arrival time.
+- Preserved locally consumed displayed liquidity until the specific price level is refreshed rather than clearing it after unrelated depth updates.
+- Replaced the Python synchronization buffer's front-deleting list with a deque and tightened direct scalar validation.
+- Required nonzero binary creation timestamps, zero reserved header fields, and well-formed L2 sidecar hashes in both Python and native readers.
+- Added repository line-ending policy through `.gitattributes` and expanded regression coverage for live bootstrap, controls, TTL, liquidity identity, and malformed artifacts.
 - Bound execution-sensitivity runs to the exact research report, prediction hash, held-out session IDs, recording hashes, and checkpoint hashes.
 - Made top-of-book research overwrite publication restore every prior artifact after a partial commit failure.
 - Reset WebSocket reconnect backoff after a confirmed successful connection.

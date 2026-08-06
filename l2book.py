@@ -3,6 +3,7 @@ from __future__ import annotations
 import enum
 import re
 import struct
+from collections import deque
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Iterable, Sequence
@@ -221,10 +222,14 @@ class L2OrderBook:
         return tuple(Level(price, self._asks[price]) for price in prices)
 
     def quantity_at(self, side: str, price: int) -> int:
+        if isinstance(price, bool) or not isinstance(price, int):
+            raise TypeError("L2 price lookup must be an integer.")
+        if price <= 0 or price > INT64_MAX:
+            raise ValueError("L2 price lookup must be a positive signed 64-bit integer.")
         if side == "bid":
-            return self._bids.get(int(price), 0)
+            return self._bids.get(price, 0)
         if side == "ask":
-            return self._asks.get(int(price), 0)
+            return self._asks.get(price, 0)
         raise ValueError("Side must be 'bid' or 'ask'.")
 
     def validate(self) -> None:
@@ -290,12 +295,16 @@ class DepthSynchronizer:
     """Implements Binance's documented snapshot + diff-depth procedure."""
 
     def __init__(self, maximum_buffered_events: int = 200_000) -> None:
+        if isinstance(maximum_buffered_events, bool) or not isinstance(
+            maximum_buffered_events, int
+        ):
+            raise TypeError("maximum_buffered_events must be an integer.")
         if maximum_buffered_events <= 0:
             raise ValueError("maximum_buffered_events must be positive.")
-        self.maximum_buffered_events = int(maximum_buffered_events)
+        self.maximum_buffered_events = maximum_buffered_events
         self.book = L2OrderBook()
         self.state = SyncState.AWAITING_SNAPSHOT
-        self._buffer: list[DepthUpdate] = []
+        self._buffer: deque[DepthUpdate] = deque()
         self.reset_count = 0
 
     @property
@@ -303,7 +312,7 @@ class DepthSynchronizer:
         return tuple(self._buffer)
 
     def reset(self, *, preserve_buffer: bool = False) -> None:
-        existing = self._buffer if preserve_buffer else []
+        existing = self._buffer if preserve_buffer else deque()
         self.book.clear()
         self._buffer = existing
         self.state = SyncState.AWAITING_SNAPSHOT
@@ -318,7 +327,7 @@ class DepthSynchronizer:
     def install_snapshot(self, snapshot: Snapshot) -> SnapshotInstallResult:
         stale = 0
         while self._buffer and self._buffer[0].final_update_id <= snapshot.last_update_id:
-            self._buffer.pop(0)
+            self._buffer.popleft()
             stale += 1
 
         if not self._buffer:
@@ -345,8 +354,8 @@ class DepthSynchronizer:
 
         self.book.install_snapshot(snapshot)
         self.state = SyncState.LIVE
-        pending = self._buffer
-        self._buffer = []
+        pending = tuple(self._buffer)
+        self._buffer = deque()
         applied: list[DepthUpdate] = []
         for index, update in enumerate(pending):
             result = self._apply_live(update)

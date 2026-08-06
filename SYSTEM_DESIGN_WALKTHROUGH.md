@@ -7,11 +7,12 @@ This document explains the design contracts that matter most when reviewing or m
 The depth stream and REST snapshot are separate data sources, so synchronization must establish one continuous update sequence before the book is trusted.
 
 1. Connect to the diff-depth stream and buffer events immediately.
-2. Fetch the REST snapshot while buffering continues.
-3. Discard buffered events whose final update ID is not newer than the snapshot.
-4. Require the first retained event to bridge `lastUpdateId + 1`.
-5. Apply later events only while update ranges remain continuous.
-6. On a gap or reconnect, mark the continuity boundary, cancel continuity-dependent simulated orders, reset streaming features, and acquire a new snapshot.
+2. Fetch the REST snapshot while the WebSocket callback continues feeding the bounded cross-thread queue.
+3. Retain that snapshot while waiting for a bridge event instead of fetching a newer snapshot for every queued event.
+4. Discard buffered events whose final update ID is not newer than the snapshot.
+5. Require the first retained event to bridge `lastUpdateId + 1`.
+6. Apply later events only while update ranges remain continuous.
+7. On a gap or reconnect, mark the continuity boundary, cancel continuity-dependent simulated orders, reset streaming features, and acquire a new snapshot.
 
 The bridge condition prevents an off-by-one error in which the first post-snapshot event is accepted even though one or more updates are missing.
 
@@ -64,7 +65,7 @@ Aggregated depth cannot reveal exact FIFO queue position, hidden liquidity, or w
 - `pro_rata_depth` treats a configurable portion of qualifying depth reduction as fill sensitivity.
 - `optimistic_depth` is an explicitly optimistic upper-bound case.
 
-Market orders sweep displayed levels and cannot reuse liquidity already consumed before the next book update. Limit orders support decision, transmission, cancellation, and expiration latency; own simulated orders at the same price are ordered FIFO.
+Market orders sweep displayed levels and cannot reuse liquidity until that exact side/price level is refreshed. Order arrivals, cancellations, and expirations are merged chronologically. Controls before a market event observe the pre-event book; an exact timestamp tie applies the recorded market event first. Limit orders support decision, transmission, cancellation, and expiration latency; own simulated orders at the same price are ordered FIFO.
 
 ## 7. Research-discipline contract
 

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from l2bin import Boundary, iter_events, read_metadata
 from l2book import (
+    INT64_MAX,
     PRICE_SCALE,
     QUANTITY_SCALE,
     UINT64_MAX,
@@ -76,7 +77,10 @@ class ExecutionConfig:
                 raise ValueError(f"{name} must fit in an unsigned 64-bit integer.")
         if not isinstance(self.queue_model, QueueModel):
             raise TypeError("queue_model must be a QueueModel value.")
-        if not math.isfinite(self.queue_ahead_fraction) or not 0.0 <= self.queue_ahead_fraction <= 5.0:
+        if (
+            not math.isfinite(self.queue_ahead_fraction)
+            or not 0.0 <= self.queue_ahead_fraction <= 5.0
+        ):
             raise ValueError("queue_ahead_fraction must be finite and between 0 and 5.")
         if (
             not math.isfinite(self.depth_depletion_fill_fraction)
@@ -131,8 +135,11 @@ class OrderRequest:
                 or isinstance(self.limit_price, bool)
                 or not isinstance(self.limit_price, int)
                 or self.limit_price <= 0
+                or self.limit_price > INT64_MAX
             ):
-                raise ValueError("Limit orders require a positive integer limit price.")
+                raise ValueError(
+                    "Limit orders require a positive signed 64-bit integer limit price."
+                )
         if self.order_type is OrderType.MARKET and self.limit_price is not None:
             raise ValueError("Market orders cannot specify a limit price.")
         if self.time_to_live_ns is not None:
@@ -212,7 +219,11 @@ class SimulationResult:
         markouts: dict[str, float | None] = {}
         horizons = sorted({horizon for fill in self.fills for horizon in fill.markouts_bps})
         for horizon in horizons:
-            values = [fill.markouts_bps[horizon] for fill in self.fills if horizon in fill.markouts_bps]
+            values = [
+                fill.markouts_bps[horizon]
+                for fill in self.fills
+                if horizon in fill.markouts_bps
+            ]
             markouts[f"{horizon}_ns"] = sum(values) / len(values) if values else None
         return {
             "orders": len(self.orders),
@@ -288,14 +299,10 @@ class ExecutionSimulator:
         for event in iter_events(metadata.path):
             timestamp = event.receipt_timestamp_ns
 
-            # Requests and cancels that arrived strictly before this market-data
-            # event must observe the pre-event book. Exact timestamp ties follow
-            # file order: the recorded market event is applied first, then local
-            # controls at the same timestamp. This avoids silently granting a
-            # simulated order priority over an exchange event with an identical
-            # local receipt timestamp.
-            self._activate_requests(timestamp, inclusive=False)
-            self._process_cancels(timestamp, inclusive=False)
+            # Controls with earlier arrival timestamps observe the pre-event book.
+            # An exact timestamp tie is resolved in favor of the recorded market
+            # event; controls at that timestamp are processed immediately after it.
+            self._process_controls(timestamp, inclusive=False)
             self._expire_orders(timestamp)
 
             if isinstance(event, Boundary):
@@ -309,20 +316,22 @@ class ExecutionSimulator:
                 self._consumed_liquidity.clear()
                 self._update_mid_and_markouts(timestamp)
             elif isinstance(event, DepthUpdate):
-                self._process_depth_depletion(event)
                 if event.final_update_id > self.book.last_update_id:
                     if event.first_update_id > self.book.last_update_id + 1:
-                        raise RuntimeError("Execution simulation encountered an L2 sequence gap.")
+                        raise RuntimeError(
+                            "Execution simulation encountered an L2 sequence gap."
+                        )
+                    self._process_depth_depletion(event)
                     self.book.apply(event)
-                    self._consumed_liquidity.clear()
+                    self._refresh_consumed_liquidity(event)
                     self._update_mid_and_markouts(timestamp)
             elif isinstance(event, Trade):
                 self._process_trade(event)
 
-            self._activate_requests(timestamp, inclusive=True)
-            self._process_cancels(timestamp, inclusive=True)
+            self._process_controls(timestamp, inclusive=True)
             self._expire_orders(timestamp)
             self._check_kill_switch()
+
         self._expire_orders(UINT64_MAX, final=True)
         self._finalize_pending_requests()
         marked_equity = self.cash_quote
@@ -338,65 +347,107 @@ class ExecutionSimulator:
             self.killed,
         )
 
-    def _activate_requests(self, timestamp_ns: int, *, inclusive: bool) -> None:
-        while self._pending_requests:
-            request = self._pending_requests[0]
-            arrival = (
-                request.decision_timestamp_ns
-                + self.config.decision_latency_ns
-                + self.config.transmission_latency_ns
-            )
-            if arrival > UINT64_MAX:
-                raise OverflowError("Order arrival timestamp exceeds 64-bit storage.")
-            if arrival > timestamp_ns or (not inclusive and arrival == timestamp_ns):
-                break
-            self._pending_requests.pop(0)
-            expiry = (
-                arrival + request.time_to_live_ns
-                if request.time_to_live_ns is not None
+    def _order_arrival(self, request: OrderRequest) -> int:
+        arrival = (
+            request.decision_timestamp_ns
+            + self.config.decision_latency_ns
+            + self.config.transmission_latency_ns
+        )
+        if arrival > UINT64_MAX:
+            raise OverflowError("Order arrival timestamp exceeds 64-bit storage.")
+        return arrival
+
+    @staticmethod
+    def _expiry_timestamp(arrival: int, time_to_live_ns: int | None) -> int | None:
+        if time_to_live_ns is None:
+            return None
+        expiry = arrival + time_to_live_ns
+        if expiry > UINT64_MAX:
+            raise OverflowError("Order expiry timestamp exceeds 64-bit storage.")
+        return expiry
+
+    @staticmethod
+    def _control_is_ready(arrival: int, timestamp_ns: int, *, inclusive: bool) -> bool:
+        return arrival < timestamp_ns or (inclusive and arrival == timestamp_ns)
+
+    def _process_controls(self, timestamp_ns: int, *, inclusive: bool) -> None:
+        while True:
+            next_order_arrival = (
+                self._order_arrival(self._pending_requests[0])
+                if self._pending_requests
                 else None
             )
-            order = SimulatedOrder(request, arrival, expiry)
-            self.orders[request.order_id] = order
-            if self.killed:
-                order.status = OrderStatus.REJECTED
-                order.rejection_reason = "kill_switch_active"
-                continue
-            if not self._position_allows(request.side, request.quantity):
-                order.status = OrderStatus.REJECTED
-                order.rejection_reason = "position_limit"
-                continue
-            if self.book.last_update_id == 0:
-                order.status = OrderStatus.REJECTED
-                order.rejection_reason = "book_unavailable"
-                continue
-            if request.order_type is OrderType.MARKET:
-                self._execute_taker(order, timestamp_ns)
-                continue
-            assert request.limit_price is not None
-            marketable = (
-                request.side is Side.BUY and request.limit_price >= self.book.best_ask.price
-            ) or (
-                request.side is Side.SELL and request.limit_price <= self.book.best_bid.price
+            next_cancel_arrival = (
+                self._pending_cancels[0][0] if self._pending_cancels else None
             )
-            if marketable:
-                self._execute_taker(order, timestamp_ns, limit_price=request.limit_price)
+
+            arrivals = [
+                value
+                for value in (next_order_arrival, next_cancel_arrival)
+                if value is not None
+            ]
+            if not arrivals:
+                return
+            next_arrival = min(arrivals)
+            if not self._control_is_ready(
+                next_arrival, timestamp_ns, inclusive=inclusive
+            ):
+                return
+
+            # Expiration is evaluated at every control timestamp. For an exact
+            # order/cancel tie, order arrival is processed first to preserve the
+            # simulator's existing deterministic tie contract.
+            self._expire_orders(next_arrival)
+            if next_order_arrival == next_arrival:
+                self._activate_next_request(next_arrival)
+                self._check_kill_switch()
             else:
-                side = "bid" if request.side is Side.BUY else "ask"
-                displayed = self.book.quantity_at(side, request.limit_price)
-                own_queue = sum(
-                    self.orders[active_id].remaining_quantity
-                    for active_id in self._active_order_ids
-                    if self.orders[active_id].request.side is request.side
-                    and self.orders[active_id].request.limit_price == request.limit_price
-                    and self.orders[active_id].status
-                    in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED)
-                )
-                order.queue_ahead = (
-                    displayed * self.config.queue_ahead_fraction + own_queue
-                )
-                order.status = OrderStatus.OPEN
-                self._active_order_ids.append(request.order_id)
+                self._process_next_cancel()
+
+    def _activate_next_request(self, arrival: int) -> None:
+        request = self._pending_requests.pop(0)
+        expiry = self._expiry_timestamp(arrival, request.time_to_live_ns)
+        order = SimulatedOrder(request, arrival, expiry)
+        self.orders[request.order_id] = order
+        if self.killed:
+            order.status = OrderStatus.REJECTED
+            order.rejection_reason = "kill_switch_active"
+            return
+        if not self._position_allows(request.side, request.quantity):
+            order.status = OrderStatus.REJECTED
+            order.rejection_reason = "position_limit"
+            return
+        if self.book.last_update_id == 0:
+            order.status = OrderStatus.REJECTED
+            order.rejection_reason = "book_unavailable"
+            return
+        if request.order_type is OrderType.MARKET:
+            self._execute_taker(order, arrival)
+            return
+
+        assert request.limit_price is not None
+        marketable = (
+            request.side is Side.BUY and request.limit_price >= self.book.best_ask.price
+        ) or (
+            request.side is Side.SELL and request.limit_price <= self.book.best_bid.price
+        )
+        if marketable:
+            self._execute_taker(order, arrival, limit_price=request.limit_price)
+            return
+
+        side = "bid" if request.side is Side.BUY else "ask"
+        displayed = self.book.quantity_at(side, request.limit_price)
+        own_queue = sum(
+            self.orders[active_id].remaining_quantity
+            for active_id in self._active_order_ids
+            if self.orders[active_id].request.side is request.side
+            and self.orders[active_id].request.limit_price == request.limit_price
+            and self.orders[active_id].status
+            in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED)
+        )
+        order.queue_ahead = displayed * self.config.queue_ahead_fraction + own_queue
+        order.status = OrderStatus.OPEN
+        self._active_order_ids.append(request.order_id)
 
     def _execute_taker(
         self,
@@ -432,6 +483,15 @@ class ExecutionSimulator:
         else:
             order.status = OrderStatus.REJECTED
             order.rejection_reason = "insufficient_visible_depth"
+
+    def _refresh_consumed_liquidity(self, update: DepthUpdate) -> None:
+        # Only an explicitly refreshed level receives new displayed-liquidity
+        # identity. An unrelated update on the opposite side must not allow a
+        # later simulated order to reuse quantity already consumed locally.
+        for level in update.bids:
+            self._consumed_liquidity.pop(("bid", level.price), None)
+        for level in update.asks:
+            self._consumed_liquidity.pop(("ask", level.price), None)
 
     def _process_trade(self, trade: Trade) -> None:
         if not self._active_order_ids:
@@ -546,7 +606,15 @@ class ExecutionSimulator:
         self.cash_quote -= fee
         self.realized_fees_quote += fee
         order.filled_quantity += quantity
-        fill = Fill(order.request.order_id, timestamp_ns, order.request.side, quantity, price, maker, fee)
+        fill = Fill(
+            order.request.order_id,
+            timestamp_ns,
+            order.request.side,
+            quantity,
+            price,
+            maker,
+            fee,
+        )
         self.fills.append(fill)
         self._pending_markouts.append(len(self.fills) - 1)
 
@@ -566,48 +634,37 @@ class ExecutionSimulator:
                 remaining.append(index)
         self._pending_markouts = remaining
 
-    def _process_cancels(self, timestamp_ns: int, *, inclusive: bool) -> None:
-        while self._pending_cancels:
-            arrival, request = self._pending_cancels[0]
-            if arrival > timestamp_ns or (not inclusive and arrival == timestamp_ns):
-                break
-            self._pending_cancels.pop(0)
-            order = self.orders.get(request.order_id)
-            if order and order.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED):
-                order.status = OrderStatus.CANCELLED
-                self._active_order_ids = [
-                    item for item in self._active_order_ids if item != request.order_id
-                ]
-                continue
+    def _process_next_cancel(self) -> None:
+        _arrival, request = self._pending_cancels.pop(0)
+        order = self.orders.get(request.order_id)
+        if order and order.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED):
+            order.status = OrderStatus.CANCELLED
+            self._active_order_ids = [
+                item for item in self._active_order_ids if item != request.order_id
+            ]
+            return
 
-            # A separately configured cancel path may beat the original order
-            # to the venue. Preserve that outcome instead of silently dropping
-            # the cancel request and activating the order later.
-            pending_index = next(
-                (
-                    index
-                    for index, pending in enumerate(self._pending_requests)
-                    if pending.order_id == request.order_id
-                ),
-                None,
-            )
-            if pending_index is not None:
-                pending = self._pending_requests.pop(pending_index)
-                order_arrival = (
-                    pending.decision_timestamp_ns
-                    + self.config.decision_latency_ns
-                    + self.config.transmission_latency_ns
-                )
-                expiry = (
-                    order_arrival + pending.time_to_live_ns
-                    if pending.time_to_live_ns is not None
-                    else None
-                )
-                cancelled = SimulatedOrder(
-                    pending, order_arrival, expiry, status=OrderStatus.CANCELLED
-                )
-                cancelled.rejection_reason = "cancel_arrived_before_order"
-                self.orders[pending.order_id] = cancelled
+        # A separately configured cancel path may beat the original order to
+        # the venue. Preserve that outcome instead of silently dropping it.
+        pending_index = next(
+            (
+                index
+                for index, pending in enumerate(self._pending_requests)
+                if pending.order_id == request.order_id
+            ),
+            None,
+        )
+        if pending_index is None:
+            return
+
+        pending = self._pending_requests.pop(pending_index)
+        order_arrival = self._order_arrival(pending)
+        expiry = self._expiry_timestamp(order_arrival, pending.time_to_live_ns)
+        cancelled = SimulatedOrder(
+            pending, order_arrival, expiry, status=OrderStatus.CANCELLED
+        )
+        cancelled.rejection_reason = "cancel_arrived_before_order"
+        self.orders[pending.order_id] = cancelled
 
     def _expire_orders(self, timestamp_ns: int, *, final: bool = False) -> None:
         for order_id in list(self._active_order_ids):
@@ -621,16 +678,8 @@ class ExecutionSimulator:
 
     def _finalize_pending_requests(self) -> None:
         for request in self._pending_requests:
-            arrival = (
-                request.decision_timestamp_ns
-                + self.config.decision_latency_ns
-                + self.config.transmission_latency_ns
-            )
-            expiry = (
-                arrival + request.time_to_live_ns
-                if request.time_to_live_ns is not None
-                else None
-            )
+            arrival = self._order_arrival(request)
+            expiry = self._expiry_timestamp(arrival, request.time_to_live_ns)
             order = SimulatedOrder(request, arrival, expiry, status=OrderStatus.EXPIRED)
             order.rejection_reason = "recording_ended_before_arrival"
             self.orders[request.order_id] = order
@@ -688,7 +737,11 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the event-driven L2 execution simulator.")
     parser.add_argument("recording")
     parser.add_argument("orders", help="CSV of order requests.")
-    parser.add_argument("--queue-model", choices=[item.value for item in QueueModel], default="trade_only")
+    parser.add_argument(
+        "--queue-model",
+        choices=[item.value for item in QueueModel],
+        default="trade_only",
+    )
     parser.add_argument("--decision-latency-us", type=float, default=0.0)
     parser.add_argument("--transmission-latency-us", type=float, default=250.0)
     parser.add_argument("--maker-fee-bps", type=float, default=0.0)

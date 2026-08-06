@@ -232,3 +232,71 @@ def test_stream_client_resets_backoff_when_connection_opens(monkeypatch) -> None
 
     assert runs == 4
     assert observed_delays == [0.5, 1.0, 0.5]
+
+
+def test_symbol_capture_reuses_pending_snapshot_until_bridge(tmp_path) -> None:
+    from l2_capture import SymbolCapture
+    from l2bin import L2Writer, iter_events
+    from l2book import Level, Snapshot, SyncState
+
+    fetch_count = 0
+    snapshot = Snapshot(
+        10,
+        101,
+        (Level(10_000, 500),),
+        (Level(10_100, 600),),
+    )
+
+    def fetcher(_symbol: str) -> Snapshot:
+        nonlocal fetch_count
+        fetch_count += 1
+        return snapshot
+
+    path = tmp_path / "pending-snapshot.l2bin"
+    writer = L2Writer(path, "BTCUSDT")
+    capture = SymbolCapture("BTCUSDT", writer, snapshot_fetcher=fetcher)
+
+    # The first event is already represented by the snapshot. The snapshot must
+    # be retained while waiting for the next event that bridges update 102.
+    capture.on_depth(DepthUpdate(11, 11, 101, 101, (), ()))
+    assert capture.synchronizer.state is SyncState.AWAITING_SNAPSHOT
+    assert capture.pending_snapshot is snapshot
+    assert fetch_count == 1
+
+    capture.on_depth(
+        DepthUpdate(12, 12, 102, 102, (Level(10_000, 450),), ())
+    )
+    assert capture.synchronizer.state is SyncState.LIVE
+    assert capture.synchronizer.book.last_update_id == 102
+    assert capture.pending_snapshot is None
+    assert fetch_count == 1
+    writer.abort()
+
+    events = tuple(iter_events(path))
+    assert [type(event).__name__ for event in events] == ["Snapshot", "DepthUpdate"]
+
+
+def test_connection_boundary_discards_pending_snapshot(tmp_path) -> None:
+    from l2_capture import SymbolCapture
+    from l2bin import L2Writer
+    from l2book import Level, Snapshot
+
+    path = tmp_path / "boundary-pending.l2bin"
+    writer = L2Writer(path, "BTCUSDT")
+    capture = SymbolCapture(
+        "BTCUSDT",
+        writer,
+        snapshot_fetcher=lambda _symbol: Snapshot(
+            10,
+            101,
+            (Level(10_000, 500),),
+            (Level(10_100, 600),),
+        ),
+    )
+    capture.on_depth(DepthUpdate(11, 11, 101, 101, (), ()))
+    assert capture.pending_snapshot is not None
+
+    capture.connection_boundary(12, connected=False)
+    assert capture.pending_snapshot is None
+    assert not capture.synchronizer.buffered_events
+    writer.abort()

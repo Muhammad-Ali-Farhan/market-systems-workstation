@@ -303,6 +303,28 @@ void unsupported_update_header_flags_test() {
     remove_recording(path);
 }
 
+
+void strict_header_validation_test() {
+    auto market = quant::make_binary_header();
+    market.created_unix_ns = 0;
+    if (quant::valid_binary_header(market)) {
+        fail("zero market-header creation timestamp was accepted");
+    }
+
+    market = quant::make_binary_header();
+    market.reserved[1] = 1;
+    if (quant::valid_binary_header(market)) {
+        fail("nonzero market-header reserved data was accepted");
+    }
+
+    const auto valid_market = quant::make_binary_header();
+    auto update = quant::make_update_id_header(valid_market.created_unix_ns);
+    update.created_unix_ns = 0;
+    if (quant::valid_update_id_header(update, valid_market.created_unix_ns)) {
+        fail("zero update-ID creation timestamp was accepted");
+    }
+}
+
 void corrupt_record_test() {
     const auto path = unique_path("corrupt");
     remove_recording(path);
@@ -337,6 +359,7 @@ int main() {
     metadata_finalization_failure_test();
     unsupported_market_header_flags_test();
     unsupported_update_header_flags_test();
+    strict_header_validation_test();
     corrupt_record_test();
     std::cout << "binary_io_tests: PASS\n";
     return 0;

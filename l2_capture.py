@@ -46,7 +46,6 @@ def monotonic_ns() -> int:
     return time.monotonic_ns()
 
 
-
 def _required_json_int(payload: dict[str, object], key: str) -> int:
     value = payload.get(key)
     if type(value) is not int:
@@ -61,7 +60,10 @@ def _required_json_bool(payload: dict[str, object], key: str) -> bool:
     return value
 
 
-def parse_stream_message(raw_message: str, receipt_timestamp_ns: int) -> tuple[str, DepthUpdate | Trade]:
+def parse_stream_message(
+    raw_message: str,
+    receipt_timestamp_ns: int,
+) -> tuple[str, DepthUpdate | Trade]:
     try:
         payload = json.loads(raw_message)
     except json.JSONDecodeError as exception:
@@ -277,9 +279,20 @@ class SymbolCapture:
     snapshot_retries: int = 0
     discarded_pre_snapshot_trades: int = 0
     depth_since_checkpoint: int = 0
-    last_snapshot: Snapshot | None = None
+    pending_snapshot: Snapshot | None = None
     snapshot_fetcher: Callable[[str], Snapshot] = fetch_snapshot
     snapshot_attempt_limit: int = 20
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.symbol, str) or not self.symbol:
+            raise ValueError("Capture symbol cannot be empty.")
+        self.symbol = self.symbol.upper()
+        if isinstance(self.snapshot_attempt_limit, bool) or not isinstance(
+            self.snapshot_attempt_limit, int
+        ):
+            raise TypeError("snapshot_attempt_limit must be an integer.")
+        if self.snapshot_attempt_limit <= 0:
+            raise ValueError("snapshot_attempt_limit must be positive.")
 
     def connection_boundary(self, receipt_timestamp_ns: int, connected: bool) -> None:
         reason = (
@@ -287,7 +300,7 @@ class SymbolCapture:
         )
         self.writer.write(Boundary(receipt_timestamp_ns, reason))
         self.synchronizer.reset()
-        self.last_snapshot = None
+        self.pending_snapshot = None
 
     def _record_applied(self, update: DepthUpdate) -> None:
         self.writer.write(update)
@@ -299,31 +312,52 @@ class SymbolCapture:
             )
             self.depth_since_checkpoint = 0
 
+    def _install_snapshot(self, snapshot: Snapshot) -> SnapshotResult:
+        result = self.synchronizer.install_snapshot(snapshot)
+        if result.result is SnapshotResult.SNAPSHOT_TOO_OLD:
+            self.snapshot_retries += 1
+            self.writer.write(Boundary(monotonic_ns(), BoundaryReason.SNAPSHOT_RETRY))
+            self.pending_snapshot = None
+            return result.result
+        if result.result is SnapshotResult.GAP_DETECTED:
+            self.sequence_gaps += 1
+            self.writer.write(Boundary(monotonic_ns(), BoundaryReason.SEQUENCE_GAP))
+            self.synchronizer.reset(preserve_buffer=True)
+            self.pending_snapshot = None
+            return result.result
+        if result.result is SnapshotResult.AWAITING_BRIDGE:
+            # Retain this exact snapshot. Events received while the REST request
+            # was in flight remain in the external event queue; the next depth
+            # event is tested against this snapshot before another REST request
+            # is made. Fetching a newer snapshot for every event can otherwise
+            # chase the live stream indefinitely.
+            self.pending_snapshot = snapshot
+            return result.result
+
+        self.writer.write(snapshot)
+        self.pending_snapshot = None
+        for update in result.applied_events:
+            self._record_applied(update)
+        return result.result
+
     def synchronize(self) -> bool:
         if not self.synchronizer.buffered_events:
             return False
+
+        if self.pending_snapshot is not None:
+            result = self._install_snapshot(self.pending_snapshot)
+            if result is SnapshotResult.SYNCHRONIZED:
+                return True
+            if result is SnapshotResult.AWAITING_BRIDGE:
+                return False
+
         for _attempt in range(self.snapshot_attempt_limit):
             snapshot = self.snapshot_fetcher(self.symbol)
-            result = self.synchronizer.install_snapshot(snapshot)
-            if result.result is SnapshotResult.SNAPSHOT_TOO_OLD:
-                self.snapshot_retries += 1
-                self.writer.write(
-                    Boundary(monotonic_ns(), BoundaryReason.SNAPSHOT_RETRY)
-                )
-                continue
-            if result.result is SnapshotResult.GAP_DETECTED:
-                self.sequence_gaps += 1
-                self.writer.write(Boundary(monotonic_ns(), BoundaryReason.SEQUENCE_GAP))
-                self.synchronizer.reset(preserve_buffer=True)
-                continue
-            if result.result is SnapshotResult.AWAITING_BRIDGE:
-                self.last_snapshot = snapshot
+            result = self._install_snapshot(snapshot)
+            if result is SnapshotResult.SYNCHRONIZED:
+                return True
+            if result is SnapshotResult.AWAITING_BRIDGE:
                 return False
-            self.writer.write(snapshot)
-            self.last_snapshot = snapshot
-            for update in result.applied_events:
-                self._record_applied(update)
-            return True
         raise RuntimeError(
             f"Could not synchronize {self.symbol} after "
             f"{self.snapshot_attempt_limit} snapshot attempts."
@@ -335,8 +369,11 @@ class SymbolCapture:
             self._record_applied(update)
         elif result is ApplyResult.GAP_DETECTED:
             self.sequence_gaps += 1
-            self.writer.write(Boundary(update.receipt_timestamp_ns, BoundaryReason.SEQUENCE_GAP))
+            self.writer.write(
+                Boundary(update.receipt_timestamp_ns, BoundaryReason.SEQUENCE_GAP)
+            )
             self.synchronizer.reset(preserve_buffer=True)
+            self.pending_snapshot = None
             self.synchronize()
         elif result is ApplyResult.BUFFERED:
             self.synchronize()

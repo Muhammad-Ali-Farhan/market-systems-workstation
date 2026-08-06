@@ -64,7 +64,10 @@ inline bool valid_binary_header(const BinaryFileHeader& header) noexcept {
            header.header_size == sizeof(BinaryFileHeader) &&
            header.record_size == sizeof(OrderBookState) &&
            header.flags == 0 &&
-           header.volume_scale == BinaryVolumeScale;
+           header.volume_scale == BinaryVolumeScale &&
+           header.created_unix_ns != 0 &&
+           header.reserved[0] == 0 && header.reserved[1] == 0 &&
+           header.reserved[2] == 0;
 }
 
 inline constexpr std::array<char, 8> UpdateIdMagic{
@@ -106,6 +109,7 @@ inline bool valid_update_id_header(
            header.header_size == sizeof(UpdateIdFileHeader) &&
            header.record_size == sizeof(std::uint64_t) &&
            header.flags == 0 &&
+           header.created_unix_ns != 0 &&
            header.created_unix_ns == expected_created_unix_ns;
 }
 
