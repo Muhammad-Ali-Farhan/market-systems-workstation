@@ -30,7 +30,6 @@ vcpkg_installed/
 *.spec
 
 # Generated workstation state
-.market_ui/
 logs/
 *.log
 recordings/*.qbin

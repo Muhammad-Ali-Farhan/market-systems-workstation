@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Rebranded the public repository as **High-Performance Market Data & Execution Engine**, organized source by subsystem, and added reasoning-focused code documentation without changing intended algorithms or binary contracts.
 - Retained an in-flight REST snapshot until a later diff-depth event bridges it, preventing live synchronization from chasing the stream with repeated newer snapshots.
 - Ordered order arrivals, cancellations, and expirations on one deterministic control timeline and timestamped fills at actual simulated arrival time.
 - Preserved locally consumed displayed liquidity until the specific price level is refreshed rather than clearing it after unrelated depth updates.

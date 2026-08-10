@@ -1,121 +1,130 @@
-# Market Systems Workstation
+# High-Performance Market Data & Execution Engine
 
-A C++20/Python platform for **sequence-correct Level-2 market data, deterministic replay, execution simulation, and market-microstructure analysis**.
+A C++20/Python market-systems project for **sequence-correct Level-2 reconstruction, deterministic recording/replay, event-driven execution simulation, and leakage-aware quantitative research**.
 
-The project is built around a simple principle: market-data research is only credible when the data path, replay path, feature path, and evaluation path are all explicit and testable.
+The system emphasizes explicit correctness contracts around market-data continuity, fixed-point state, binary integrity, replay identity, concurrency, and research provenance. The native extension remains named `quant_engine` for ABI/import compatibility.
 
-It does **not** claim live profitability or production readiness. Its purpose is to demonstrate reliable systems engineering, reproducible experimentation, and honest execution assumptions.
+> **Scope:** execution in this repository is a simulator for research and sensitivity analysis. It is not a live exchange order gateway, and the benchmark figures below are isolated component measurements rather than end-to-end exchange throughput or latency.
 
-## Highlights
+## Engineering highlights
 
-- **C++20 market-data core** using Boost.Beast, OpenSSL, simdjson, pybind11, and NumPy.
+- **C++20 market-data core** using Boost.Asio/Beast, OpenSSL, simdjson, pybind11, and NumPy.
 - **Sequence-correct Binance L2 synchronization** using buffered diff-depth events plus REST snapshots.
 - **Exact fixed-point books** with independent `std::map` and cache-oriented flat implementations.
-- **Lock-free SPSC publication** with documented acquire/release memory ordering.
-- **CRC-protected event recording** with atomic completion metadata and state checkpoints.
-- **Deterministic replay** verified through intermediate and final order-book hashes.
-- **Execution simulation** with market/limit orders, partial fills, latency, fees, queue-ahead sensitivity, inventory limits, and kill switches.
+- **Lock-free SPSC publication** with explicit single-producer/single-consumer ownership and acquire/release ordering.
+- **CRC-protected event recording** with finalized SHA-256 provenance metadata and deterministic state checkpoints.
+- **Deterministic replay** verified through update-ID continuity and intermediate/final order-book hashes.
+- **Execution simulation** for market/limit orders, partial fills, latency, fees, queue-ahead sensitivity, inventory limits, and kill switches.
 - **Leakage-aware research** with chronological sessions, train-only normalization, validation-only selection, untouched holdouts, and test-set fingerprints.
-- **Cross-platform CI** covering Python, C++, sanitizers, thread checks, and fuzz-smoke tests.
-- **Native desktop interface** for capture, replay, diagnostics, research, and evidence inspection.
+- **Cross-platform verification** with Python/native tests, Windows/Linux CI, ASan, UBSan, TSan, and libFuzzer smoke coverage.
+- **Desktop tooling** for capture, replay, diagnostics, research, and evidence inspection.
 
-## System architecture
+## Architecture
 
 ```mermaid
 flowchart LR
-    WS[Diff-depth and aggregate-trade WebSocket] --> BUFFER[Bounded event buffer]
+    WS[Binance diff-depth + aggregate-trade WebSocket] --> BUFFER[Bounded event queue]
     SNAPSHOT[REST depth snapshot] --> SYNC[Sequence synchronizer]
     BUFFER --> SYNC
-    SYNC --> BOOK[Exact L2 order book]
+    SYNC --> BOOK[Fixed-point L2 order book]
     SYNC --> RECORDER[CRC event recorder]
-    BOOK --> CHECKPOINTS[State checkpoints]
+    BOOK --> CHECKPOINTS[State-hash checkpoints]
     CHECKPOINTS --> RECORDER
     RECORDER --> REPLAY[Deterministic replay]
     REPLAY --> FEATURES[Streaming features]
-    FEATURES --> RESEARCH[Chronological evaluation]
+    FEATURES --> RESEARCH[Chronological research]
     REPLAY --> EXECUTION[Execution simulator]
     RESEARCH --> SIGNALS[Held-out signals]
     SIGNALS --> EXECUTION
 ```
 
-A separate top-of-book path remains available as a compact benchmark and compatibility pipeline:
+A separate compact top-of-book path remains available for native ingestion/replay and the SPSC microbenchmark:
 
 ```text
-TLS WebSocket -> simdjson -> fixed 32-byte state
-              -> SPSC queue -> pybind11/NumPy
-              -> independent recorder -> deterministic replay
+TLS WebSocket -> simdjson -> 32-byte OrderBookState
+              -> SPSC ring buffer -> pybind11 / NumPy
+              -> binary recorder -> deterministic replay
 ```
 
-Detailed design documents:
+Detailed documentation:
 
-- [Architecture](ARCHITECTURE.md)
-- [L2 synchronization and data flow](L2_ARCHITECTURE.md)
-- [Binary event format](L2_FORMAT.md)
-- [Execution assumptions](EXECUTION_MODEL.md)
-- [Performance methodology](PERFORMANCE_METHODOLOGY.md)
-- [System-design walkthrough](SYSTEM_DESIGN_WALKTHROUGH.md)
-- [Engineering decisions](DECISIONS.md)
+- [System architecture](docs/architecture/overview.md)
+- [L2 synchronization and data flow](docs/architecture/l2-data-flow.md)
+- [System-design walkthrough](docs/architecture/system-design.md)
+- [L2 binary format](docs/formats/l2-binary-format.md)
+- [Execution-model assumptions](docs/execution/model.md)
+- [Performance methodology](docs/performance/methodology.md)
+- [Engineering decisions](docs/development/decisions.md)
+- [Development workflow](docs/development/development.md)
 
 ## Correctness contracts
 
-### L2 synchronization
+### Sequence-correct L2 reconstruction
 
-The synchronizer:
+The synchronizer buffers diff-depth updates while a REST snapshot is obtained, removes events already represented by the snapshot, and requires the first retained update to span `lastUpdateId + 1`. Later updates must remain continuous. A gap invalidates local reconstruction and forces resynchronization instead of allowing a plausible-looking but incorrect book to continue.
 
-1. Buffers diff-depth events before snapshot installation.
-2. Downloads a REST snapshot while WebSocket events continue entering the bounded queue.
-3. Retains that snapshot until a later event bridges it, avoiding repeated snapshot chasing.
-4. Drops buffered events already covered by the snapshot.
-5. Requires the first retained event to bridge `lastUpdateId + 1`.
-6. Applies later updates only when their ranges remain continuous.
-7. Detects gaps, records a boundary, and resynchronizes.
+When a snapshot is installed before a bridging event is available, that exact snapshot is retained while later WebSocket events arrive. The capture path does not repeatedly chase newer snapshots simply because the bridge has not appeared yet.
+
+### Exact price-level identity
+
+L2 prices and quantities are represented as scaled integers. Fixed-point representation avoids floating-point equality ambiguity when comparing, sorting, hashing, recording, and replaying exact exchange price levels. Quantity zero is interpreted as a deletion signal rather than an active resting level.
 
 ### Deterministic recording and replay
 
-Current-format recordings preserve snapshots, depth deltas, aggregate trades, continuity boundaries, and book checkpoints. A replay is accepted only when it reproduces the expected update ID and state hashes.
+Current-format L2 recordings preserve snapshots, depth deltas, aggregate trades, continuity boundaries, and book checkpoints. Per-event CRC32 detects accidental payload corruption. Finalized metadata binds the recording and checkpoint sidecar through SHA-256 hashes. Replay is accepted only when sequence/state invariants reproduce the expected logical book state.
 
 ### Research discipline
 
-The research pipeline uses complete chronological sessions when enough data is available. Normalization is fitted on training data only; regularization and signal thresholds are selected on validation data only; the final test set is fingerprinted and evaluated once unless reuse is made explicit.
+Chronological research fits normalization on training data only, performs model/threshold selection on validation data only, and leaves the final holdout untouched until evaluation. Session boundaries prevent features and labels from crossing discontinuities. Published reports fingerprint held-out evidence and bind results to exact source-recording hashes.
 
-### Execution honesty
+### Execution-model honesty
 
-Aggregated depth does not reveal exact order-level queue priority. Passive fills are therefore reported across explicit sensitivity models rather than presented as observed ground truth.
+Aggregated L2 does not expose exact order-level queue priority. Passive fills therefore use explicit queue-ahead assumptions and are reported as model sensitivity rather than historical ground truth. Marketable orders consume modeled visible liquidity in price priority, and locally consumed liquidity cannot be reused until the exchange explicitly refreshes that level.
+
+## Measured component performance
+
+These are **microbenchmark results**, not claims about complete exchange-to-strategy throughput or latency.
+
+- **Flat L2 order book:** 42.8K updates/s median across five deterministic 1M-update runs, **6.7×** the `std::map` reference median. Both implementations finished every run with the same logical state hash.
+- **SPSC ring buffer:** 377.5M 32-byte records/s median across five 1B-record producer/consumer runs. The hardened benchmark observes all 32 payload bytes and validates a deterministic, non-cryptographic payload-integrity guard so the transfer cannot collapse to a timestamp-only workload.
+
+The benchmark sources are in [`benchmarks/native/`](benchmarks/native/). See [performance methodology](docs/performance/methodology.md) for scope and interpretation.
 
 ## Repository layout
 
 ```text
-C++ core
-  RingBuffer.hpp
-  MarketEngine.hpp
-  L2Book.hpp
-  L2Synchronizer.hpp
-  L2BinaryFormat.hpp
-  Bindings.cpp
-
-Python data and research
-  l2_capture.py
-  l2bin.py
-  l2book.py
-  l2_features.py
-  l2_research.py
-  execution_simulator.py
-  research.py
-  research_diagnostics.py
-
-Desktop application
-  market_workstation.py
-  market_ui/
-
-Verification and tests
-  verify_workstation.py
-  verify_l2_replay.py
-  tests/
-  fuzz/
-  benchmarks/
+market-data-execution-engine/
+├── native/
+│   ├── include/market_engine/
+│   │   ├── concurrency/      # SPSC publication
+│   │   ├── core/             # fixed-size top-of-book state
+│   │   ├── engine/           # ingestion/replay lifecycle
+│   │   ├── market_data/      # Binance feed + L2 synchronization
+│   │   ├── order_book/       # fixed-point L2 types/books
+│   │   └── recording/        # binary formats, recorder, replay
+│   └── src/                  # pybind11 bindings
+├── market_engine/
+│   ├── market_data/          # Python reconstruction/capture/microstructure
+│   ├── recording/            # qbin/L2 readers and writers
+│   ├── execution/            # simulator and sensitivity analysis
+│   ├── research/             # features, diagnostics, experiments
+│   ├── cli/                  # command-line entry points
+│   └── ui/                   # desktop interface
+├── benchmarks/native/        # isolated C++ microbenchmarks
+├── tests/
+│   ├── native/               # C++ correctness tests
+│   └── python/               # Python regression/integration tests
+├── fuzz/                     # libFuzzer target
+├── scripts/windows/          # Windows build/capture helpers
+├── docs/                     # architecture, formats, execution, methodology
+├── recordings/               # generated recordings (gitignored except .gitkeep)
+├── artifacts/                # generated research evidence (gitignored except .gitkeep)
+├── CMakeLists.txt
+├── pyproject.toml
+└── vcpkg.json
 ```
 
-The native extension retains the internal module name `quant_engine` for ABI compatibility with the existing Windows build. Public project branding and command names are intentionally engineering-first.
+The folders are organized by **engineering responsibility**, not by generic concepts such as “atomics” or “systems.” A file lives with the subsystem whose behavior it implements.
 
 ## Build from source
 
@@ -123,7 +132,7 @@ The native extension retains the internal module name `quant_engine` for ABI com
 
 - CPython 3.12 x64
 - CMake 3.21+
-- A C++20 compiler
+- C++20 compiler
 - pybind11
 - Boost.System
 - OpenSSL
@@ -136,20 +145,24 @@ The native extension retains the internal module name `quant_engine` for ABI com
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
+
+If the Windows Python launcher does not expose your CPython 3.12 installation, create the environment with the `python` executable that reports Python 3.12 instead.
 
 ### Windows native build
 
-Install Visual Studio Build Tools with **Desktop development with C++**, then point the script at vcpkg:
+Install Visual Studio Build Tools with **Desktop development with C++**, then point the build at your vcpkg installation:
 
 ```powershell
-$env:VCPKG_ROOT = "C:\path\to\vcpkg"
-.\BUILD_NATIVE.ps1
+$env:VCPKG_ROOT = "C:\vcpkg"
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+.\scripts\windows\build_native.ps1
 ```
 
-`BUILD_NATIVE.ps1` locates Visual Studio through `vswhere`, activates the x64 MSVC developer environment, and configures Ninja with `cl.exe`. This prevents MinGW/MSVC library mismatches when linking the static vcpkg dependencies.
+The script resolves the repository root, activates the x64 MSVC environment through `vswhere`/`VsDevCmd.bat`, configures Ninja with `cl.exe`, builds the native extension/tests/benchmarks, runs native tests, installs `quant_engine.cp312-win_amd64.pyd`, and runs the full workstation verifier.
 
-For a manual build, first open an **x64 Native Tools Command Prompt for Visual Studio**, then run from the repository root:
+For a manual build from an x64 Native Tools Command Prompt:
 
 ```cmd
 .venv\Scripts\cmake.exe -S . -B build-native -G Ninja ^
@@ -164,11 +177,10 @@ For a manual build, first open an **x64 Native Tools Command Prompt for Visual S
 .venv\Scripts\ctest.exe --test-dir build-native --output-on-failure
 ```
 
-Copy the built `quant_engine.cp312-win_amd64.pyd` into the repository root, then run:
+Launch the desktop application:
 
 ```powershell
-.\.venv\Scripts\python.exe verify_workstation.py
-.\.venv\Scripts\python.exe market_workstation.py
+.\.venv\Scripts\python.exe -m market_engine.cli.workstation
 ```
 
 ## Common workflows
@@ -176,50 +188,45 @@ Copy the built `quant_engine.cp312-win_amd64.pyd` into the repository root, then
 ### Capture L2 sessions
 
 ```powershell
-.\.venv\Scripts\python.exe l2_capture.py `
+.\.venv\Scripts\python.exe -m market_engine.market_data.l2_capture `
   --symbols BTCUSDT ETHUSDT `
   --duration-minutes 30 `
   --output-dir recordings/l2
 ```
 
-Each symbol produces:
+Each finalized symbol session produces the `.l2bin` data file, `.l2chk` checkpoint sidecar, and `.meta.json` provenance metadata.
 
-```text
-<symbol>-<time>.l2bin
-<symbol>-<time>.l2bin.l2chk
-<symbol>-<time>.l2bin.meta.json
-```
-
-### Verify deterministic replay
+### Verify deterministic L2 replay
 
 ```powershell
-.\.venv\Scripts\python.exe verify_l2_replay.py `
+.\.venv\Scripts\python.exe -m market_engine.cli.verify_l2_replay `
   recordings/l2/btcusdt-....l2bin `
   --speeds 0 10 1
 ```
 
-### Run benchmarks
+### Run L2 benchmarks
 
 ```powershell
-.\.venv\Scripts\python.exe l2_benchmark.py `
+.\.venv\Scripts\python.exe -m market_engine.cli.l2_benchmark `
   recordings/l2/btcusdt-....l2bin `
   --trials 7
 ```
 
-For the native order-book benchmark:
+Native component benchmarks after a build:
 
 ```powershell
-.\build-native\l2_book_benchmark.exe 1000000
+.\build-native\l2_order_book_benchmark.exe 1000000
+.\build-native\spsc_queue_benchmark.exe 1000000000
 ```
 
-### Run chronological research
+### Run chronological L2 research
 
 ```powershell
 $sessions = Get-ChildItem recordings\l2\btcusdt-*.l2bin |
   Sort-Object Name |
   Select-Object -ExpandProperty FullName
 
-.\.venv\Scripts\python.exe l2_research.py $sessions `
+.\.venv\Scripts\python.exe -m market_engine.research.l2_pipeline $sessions `
   --horizons 20 `
   --fee-bps-per-side 0.0 `
   --slippage-bps-per-side 0.0 `
@@ -228,10 +235,10 @@ $sessions = Get-ChildItem recordings\l2\btcusdt-*.l2bin |
 
 ### Replay held-out signals through execution assumptions
 
-The research report is mandatory. It binds the prediction CSV and each held-out session ID to the exact recording and checkpoint hashes used by the experiment.
+The research report is mandatory. It binds the prediction CSV and held-out session IDs to exact recording/checkpoint hashes.
 
 ```powershell
-.\.venv\Scripts\python.exe l2_execution_sensitivity.py `
+.\.venv\Scripts\python.exe -m market_engine.execution.sensitivity `
   artifacts/l2/l2_h20_test_predictions.csv `
   --research-report artifacts/l2/l2_h20_report.json `
   --recording 0=recordings/l2/session-a.l2bin `
@@ -241,25 +248,26 @@ The research report is mandatory. It binds the prediction CSV and each held-out 
   --latencies-us 0 100 250 500 1000
 ```
 
-## Testing
+## Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall -q -f .
+.\.venv\Scripts\python.exe -m compileall -q -f market_engine tests/python
 .\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m pytest
-ctest --test-dir build-native --output-on-failure
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m market_engine.cli.verify_workstation
+.\.venv\Scripts\ctest.exe --test-dir build-native --output-on-failure
 ```
 
-CI additionally runs AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer on the SPSC queue, and a bounded L2 binary-format fuzz target.
+GitHub Actions additionally exercises Linux/Windows native builds, AddressSanitizer, UndefinedBehaviorSanitizer, ThreadSanitizer for the SPSC queue, and a bounded libFuzzer smoke target.
 
-## Honest limitations
+## Limitations
 
-- The feed is aggregated L2, not order-by-order market-by-order data.
-- Exact exchange queue position is not observable.
-- Passive-fill results are model sensitivity, not historical ground truth.
-- Local receipt timestamps are not exchange-to-host latency.
-- Short recordings are suitable for systems validation, not profitability claims.
-- Results must be regenerated from current-format complete recordings before publication.
+- Binance input is aggregated L2, not market-by-order data.
+- Exact exchange queue position is unobservable from this feed.
+- Passive-fill results are execution-model sensitivity, not historical ground truth.
+- Local receipt timestamps are not synchronized exchange-to-host latency.
+- SPSC benchmark throughput is isolated queue throughput, not full market-data throughput.
+- Short captures are systems-validation evidence, not profitability evidence.
 - Production deployment would require additional operational controls, exchange-specific validation, monitoring, and risk governance.
 
 ## License
