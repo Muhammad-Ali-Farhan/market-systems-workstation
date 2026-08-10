@@ -66,3 +66,5 @@ _release/
 all_project_files.txt
 all files*.txt
 *project_bundle*.txt
+
+build-native/
