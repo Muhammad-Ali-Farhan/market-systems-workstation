@@ -50,6 +50,7 @@ inline std::uint64_t unix_time_ns() noexcept {
             now.time_since_epoch()).count());
 }
 
+// Construct a new versioned header while preserving the established 64-byte layout.
 inline BinaryFileHeader make_binary_header() noexcept {
     BinaryFileHeader header{};
     std::memcpy(header.magic, BinaryMagic.data(), BinaryMagic.size());
@@ -62,6 +63,7 @@ inline BinaryFileHeader make_binary_header() noexcept {
     return header;
 }
 
+// Reject incompatible layout, scaling, flags, timestamps, or nonzero reserved fields.
 inline bool valid_binary_header(const BinaryFileHeader& header) noexcept {
     return std::memcmp(header.magic, BinaryMagic.data(), BinaryMagic.size()) == 0 &&
            header.version == BinaryVersion &&
@@ -92,6 +94,7 @@ struct UpdateIdFileHeader {
 static_assert(sizeof(UpdateIdFileHeader) == 32);
 static_assert(std::is_trivially_copyable_v<UpdateIdFileHeader>);
 
+// Bind the update-ID companion to the market file through the same creation timestamp.
 inline UpdateIdFileHeader make_update_id_header(
     std::uint64_t created_unix_ns) noexcept {
     UpdateIdFileHeader header{};
@@ -104,6 +107,7 @@ inline UpdateIdFileHeader make_update_id_header(
     return header;
 }
 
+// Validate both the companion format and its identity link to the market recording.
 inline bool valid_update_id_header(
     const UpdateIdFileHeader& header,
     std::uint64_t expected_created_unix_ns) noexcept {

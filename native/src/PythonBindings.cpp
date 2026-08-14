@@ -57,6 +57,8 @@ py::list levels_to_python(const std::vector<quant::l2::Level>& levels) {
     return output;
 }
 
+// Thin ownership wrapper that converts Python values once, then delegates all
+// sequence and order-book invariants to the native synchronizer.
 class NativeL2Synchronizer {
 public:
     explicit NativeL2Synchronizer(std::size_t maximum_buffered_events)
@@ -77,6 +79,7 @@ public:
             parse_python_levels(bids),
             parse_python_levels(asks),
         };
+        // No Python objects are accessed while native state is mutated.
         py::gil_scoped_release release;
         return std::string{quant::l2::to_string(synchronizer_.ingest(update))};
     }
@@ -94,6 +97,8 @@ public:
         };
         quant::l2::SnapshotInstallResult result;
         {
+            // Snapshot installation may replay a large buffered delta set; release
+            // the GIL while C++ owns all referenced data.
             py::gil_scoped_release release;
             result = synchronizer_.install_snapshot(snapshot);
         }
@@ -272,6 +277,8 @@ PYBIND11_MODULE(quant_engine, module) {
         .def("replayed_ticks", &IngestionEngine::replayed_ticks)
         .def("replay_backpressure_events", &IngestionEngine::replay_backpressure_events)
         .def("replay_errors", &IngestionEngine::replay_errors)
+        // The NumPy array supplies writable caller-owned storage; the native queue
+        // retains no pointer after the call returns.
         .def(
             "consume_batch",
             [](IngestionEngine& engine,

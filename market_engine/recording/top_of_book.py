@@ -41,12 +41,14 @@ if RECORD_DTYPE.itemsize != RECORD_SIZE:
 
 @dataclass(frozen=True)
 class RecordingBoundary:
+    """A record index at which online feature history must not continue unchanged."""
     record_index: int
     kind: str
 
 
 @dataclass(frozen=True)
 class RecordingMetadata:
+    """Validated qbin header, sidecar, continuity, and completeness metadata."""
     path: Path
     file_size: int
     version: int
@@ -106,6 +108,7 @@ def _optional_bool(payload: dict[str, object], key: str) -> bool | None:
 
 
 def _read_sidecar(path: Path, record_count: int) -> tuple[Path | None, dict[str, object]]:
+    """Load and normalize the recording metadata sidecar and boundary list."""
     sidecar = Path(f"{path}.meta.json")
     if not sidecar.exists():
         return None, {}
@@ -186,6 +189,7 @@ def _read_update_id_metadata(
     created_unix_ns: int,
     record_count: int,
 ) -> tuple[Path | None, int | None]:
+    """Validate the update-ID companion file against the market recording."""
     raw_name = payload.get("update_id_file")
     if raw_name is None:
         return None, None
@@ -232,6 +236,10 @@ def _read_update_id_metadata(
 
 
 def read_metadata(file_path: str | Path) -> RecordingMetadata:
+    """Validate qbin structure and reconcile binary, sidecar, and update-ID metadata.
+
+    The returned object distinguishes legacy/missing evidence from explicitly complete captures.
+    """
     # The fixed binary header proves format compatibility; the sidecar adds session
     # completeness/provenance without mutating the version-1 binary layout.
     path = Path(file_path)
@@ -443,6 +451,7 @@ def validate_update_ids(
     *,
     context: str = "recording",
 ) -> None:
+    """Enforce count, positivity, and strict monotonicity of exchange update IDs."""
     if update_ids is None or update_ids.size == 0:
         return
     values = np.asarray(update_ids, dtype=np.uint64)
@@ -468,6 +477,7 @@ def validate_update_ids(
 
 
 def validate_records(records: np.ndarray, *, context: str = "recording") -> None:
+    """Enforce dtype, timestamp, price, spread, and volume invariants."""
     if records.dtype != RECORD_DTYPE:
         try:
             records = np.asarray(records, dtype=RECORD_DTYPE)
@@ -507,6 +517,10 @@ def contiguous_slices(
     *,
     max_gap_ns: int,
 ) -> tuple[slice, ...]:
+    """Partition records at explicit boundaries, timestamp regressions, or excessive gaps.
+
+    Each returned slice is safe to treat as one continuous feature-history segment.
+    """
     if max_gap_ns <= 0:
         raise ValueError("max_gap_ns must be positive.")
     count = int(records.size)

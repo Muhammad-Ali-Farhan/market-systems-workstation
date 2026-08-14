@@ -22,6 +22,8 @@
 #include "market_engine/market_data/BinanceBookTickerFeed.hpp"
 #include "market_engine/concurrency/SpscRingBuffer.hpp"
 
+// Owns one live-feed or replay worker and exposes a single-consumer publication API.
+// Lifecycle operations are serialized; data transfer remains lock-free inside the SPSC queue.
 class IngestionEngine {
 public:
     enum class State : std::uint8_t {
@@ -46,6 +48,8 @@ public:
         start_live("");
     }
 
+    // Start the Binance producer, optionally attaching an asynchronous binary recorder.
+    // Any failure before the worker starts rolls the engine back to a stopped resource state.
     void start_live(const std::string& recording_path) {
         std::lock_guard lock(lifecycle_mutex_);
         prepare_start_locked();
@@ -76,6 +80,8 @@ public:
         }
     }
 
+    // Start deterministic replay. speed == 0 requests maximum lossless throughput;
+    // positive speeds scale source inter-record timing without rewriting source timestamps.
     void start_replay(const std::string& file_path, double speed) {
         if (file_path.empty()) {
             throw std::invalid_argument("Replay file path cannot be empty.");
@@ -107,6 +113,8 @@ public:
         }
     }
 
+    // Request producer shutdown, join the worker, drain/finalize recording, and release mode state.
+    // The operation is idempotent and is also invoked by the destructor.
     void stop() noexcept {
         std::lock_guard lock(lifecycle_mutex_);
         const State previous = state_.load(std::memory_order_acquire);
@@ -139,6 +147,8 @@ public:
         state_.store(State::stopped, std::memory_order_release);
     }
 
+    // Drain the shared queue into caller-provided storage. A guard enforces the SPSC
+    // contract even if multiple Python threads accidentally call this method concurrently.
     std::size_t consume_batch(
         OrderBookState* destination,
         std::size_t maximum_count) {

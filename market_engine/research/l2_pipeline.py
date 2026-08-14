@@ -47,6 +47,7 @@ REPORT_SCHEMA_VERSION = 2
 
 @dataclass(frozen=True, slots=True)
 class PreparedL2Recording:
+    """Complete hash-verified L2 recording admitted to one experiment."""
     path: Path
     metadata: L2Metadata
     sha256: str
@@ -72,6 +73,11 @@ def _git_commit(root: Path) -> str | None:
 # Validate completeness and content identity before feature construction; incomplete
 # captures are systems evidence, not silently acceptable research sessions.
 def prepare_recordings(recordings: Iterable[str | Path]) -> tuple[PreparedL2Recording, ...]:
+    """Validate, deduplicate, single-symbol check, and chronologically order experiment inputs.
+
+    Incomplete captures remain systems evidence but are never silently admitted as research
+    sessions.
+    """
     prepared: list[PreparedL2Recording] = []
     seen_hashes: dict[str, Path] = {}
     symbols: set[str] = set()
@@ -121,6 +127,7 @@ def _prior_test_reports(
     output_directory: Path,
     test_fingerprint: str,
 ) -> tuple[Path, ...]:
+    """Find prior reports that evaluated the same fingerprinted test examples."""
     matches: list[Path] = []
     for path in output_directory.glob("*_report.json"):
         try:
@@ -212,6 +219,7 @@ def _json_safe(value: object) -> object:
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    """Publish a new JSON artifact atomically without overwriting prior evidence."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         raise FileExistsError(f"Refusing to overwrite research artifact: {path}")
@@ -233,6 +241,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
 # Write artifacts under temporary names first so partially generated evidence never
 # appears at the canonical publication paths.
 def _staging_path(destination: Path, suffix: str) -> Path:
+    """Reserve a temporary sibling path for all-or-nothing artifact publication."""
     descriptor, name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=suffix, dir=destination.parent
     )
@@ -251,6 +260,7 @@ def _format_metric(value: object, digits: int = 6) -> str:
 
 
 def _fingerprint(data: L2FeatureSet, indices: np.ndarray) -> str:
+    """Hash exact timestamps, update IDs, features, and targets for selected rows."""
     digest = hashlib.sha256()
     for array in (
         data.timestamps_ns[indices],
@@ -270,6 +280,7 @@ def _delay_predictions(
     session_ids: np.ndarray,
     delay_events: int,
 ) -> np.ndarray:
+    """Delay predictions within each session without crossing session boundaries."""
     if delay_events <= 0:
         return predictions.copy()
     output = np.zeros_like(predictions)
@@ -290,6 +301,7 @@ def _evaluate_predictions(
     bootstrap_samples: int,
     bootstrap_seed: int,
 ) -> dict[str, object]:
+    """Compute predictive and executable metrics for one fixed prediction vector."""
     trades = strategy_trades(
         prediction,
         data,  # type: ignore[arg-type]
@@ -325,6 +337,7 @@ def _regime_diagnostics(
     bootstrap_samples: int,
     bootstrap_seed: int,
 ) -> dict[str, object]:
+    """Evaluate selected test signals across spread, volatility, and imbalance regimes."""
     spread_column = FEATURE_NAMES.index("spread_bps")
     volatility_column = FEATURE_NAMES.index("realized_volatility_20")
     result: dict[str, object] = {}
@@ -375,6 +388,7 @@ def _fit_group(
     bootstrap_samples: int,
     bootstrap_seed: int,
 ) -> dict[str, object]:
+    """Fit and validate one named feature group using train-only normalization."""
     names = FEATURE_GROUPS[group_name]
     columns = _indices(names)
     X_train_raw = data.X[split.train][:, columns]
@@ -464,6 +478,11 @@ def run_experiment(
     bootstrap_seed: int,
     allow_test_reuse: bool = False,
 ) -> dict[str, object]:
+    """Run the canonical chronological Level-2 research and publication workflow.
+
+    Training fits parameters, validation selects them, and the holdout is evaluated only after
+    selection is frozen.
+    """
     if horizon <= 0:
         raise ValueError("horizon must be positive.")
     if bootstrap_samples < 100:

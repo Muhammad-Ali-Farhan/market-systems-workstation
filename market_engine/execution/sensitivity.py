@@ -27,6 +27,7 @@ EXECUTION_SENSITIVITY_SCHEMA_VERSION = 2
 
 @dataclass(frozen=True, slots=True)
 class PredictionOrder:
+    """One selected held-out signal converted to a potential execution decision."""
     session_id: int
     global_row: int
     timestamp_ns: int
@@ -37,6 +38,7 @@ class PredictionOrder:
 
 @dataclass(frozen=True, slots=True)
 class ExpectedRecording:
+    """Recording identity bound into the originating research report."""
     session_id: int
     file: str
     symbol: str
@@ -46,6 +48,7 @@ class ExpectedRecording:
 
 @dataclass(frozen=True, slots=True)
 class VerifiedResearchProvenance:
+    """Cross-validated report, prediction, recording, and checkpoint identity."""
     report_path: Path
     report_sha256: str
     prediction_file: str
@@ -148,6 +151,10 @@ def verify_research_provenance(
     recordings: Mapping[int, Path],
     orders: tuple[PredictionOrder, ...],
 ) -> VerifiedResearchProvenance:
+    """Verify that signals and recordings are exactly those bound by the research report.
+
+    Execution sensitivity is rejected on any schema, session, symbol, or content-hash mismatch.
+    """
     report_path = Path(report).expanduser().resolve()
     predictions_path = Path(predictions).expanduser().resolve()
     if not report_path.is_file():
@@ -284,6 +291,7 @@ def verify_research_provenance(
 
 
 def aggregate_summaries(summaries: list[dict[str, object]]) -> dict[str, object]:
+    """Combine per-session simulator summaries without averaging incompatible denominators."""
     orders = sum(int(item["orders"]) for item in summaries)
     fills = sum(int(item["fills"]) for item in summaries)
     requested = sum(float(item["requested_quantity"]) for item in summaries)
@@ -327,6 +335,11 @@ def run_sensitivity(
     queue_ahead_fraction: float,
     time_to_live_ns: int,
 ) -> dict[str, object]:
+    """Replay one immutable held-out signal set across latency and queue assumptions.
+
+    Every case uses the same verified evidence so differences reflect execution assumptions
+    alone.
+    """
     predictions_path = Path(predictions).expanduser().resolve()
     canonical_recordings = {
         session_id: Path(path).expanduser().resolve()

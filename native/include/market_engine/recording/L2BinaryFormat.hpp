@@ -82,6 +82,7 @@ inline std::uint32_t crc32(std::span<const std::byte> bytes) noexcept {
     return ~value;
 }
 
+// Validate version, fixed layout, scaling, symbol, creation time, and reserved fields.
 inline bool validate_header(const FileHeader& header) noexcept {
     if (std::memcmp(header.magic, Magic.data(), Magic.size()) != 0 ||
         header.version != Version ||
@@ -102,6 +103,8 @@ inline bool validate_header(const FileHeader& header) noexcept {
     return true;
 }
 
+// Validate an untrusted in-memory recording structurally and semantically without
+// dereferencing payload fields until size arithmetic and bounds checks succeed.
 inline bool validate_buffer(std::span<const std::byte> bytes) noexcept {
     if (bytes.size() < sizeof(FileHeader)) {
         return false;

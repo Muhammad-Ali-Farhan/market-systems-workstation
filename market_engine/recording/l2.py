@@ -70,6 +70,7 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{1,15}$")
 
 @dataclass(frozen=True, slots=True)
 class Boundary:
+    """Recorded point at which downstream state/history must reset."""
     receipt_timestamp_ns: int
     reason: BoundaryReason
 
@@ -90,6 +91,7 @@ L2Event = Snapshot | DepthUpdate | Trade | Boundary
 
 @dataclass(frozen=True, slots=True)
 class Checkpoint:
+    """Deterministic book-state identity captured after a specific event index."""
     event_index: int
     update_id: int
     state_hash: int
@@ -108,6 +110,7 @@ class Checkpoint:
 
 @dataclass(frozen=True, slots=True)
 class L2Metadata:
+    """Validated Level-2 artifact identity, completeness, counters, and companion files."""
     path: Path
     symbol: str
     created_unix_ns: int
@@ -141,6 +144,7 @@ def sha256_file(path: str | Path, *, chunk_size: int = 1 << 20) -> str:
 # Metadata publication uses temp-file + fsync + replace so an interruption cannot
 # expose a half-written JSON sidecar as a valid session description.
 def _atomic_json(path: Path, payload: dict[str, object]) -> None:
+    """Publish JSON through a temporary file and atomic replacement."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -221,6 +225,7 @@ def _level_payload(bids: tuple[Level, ...], asks: tuple[Level, ...]) -> bytes:
 # Event CRCs cover the variable payload for fast corruption detection. Whole-file
 # SHA-256 hashes in finalized metadata serve the separate provenance/integrity role.
 def _pack_event(event: L2Event) -> bytes:
+    """Serialize one typed event and append its payload CRC32."""
     if isinstance(event, Snapshot):
         event_type = EventType.SNAPSHOT
         flags = 0
@@ -366,6 +371,7 @@ class L2Writer:
         self._closed = False
 
     def write(self, event: L2Event) -> int:
+        """Append one event while maintaining per-type counts and chronological order."""
         if self._closed:
             raise RuntimeError("L2 writer is closed.")
         encoded = _pack_event(event)
@@ -383,6 +389,7 @@ class L2Writer:
         return self.event_count - 1
 
     def write_checkpoint(self, update_id: int, state_hash: int) -> None:
+        """Append a monotonic event-index/update-ID/state-hash checkpoint."""
         if self._closed:
             raise RuntimeError("L2 writer is closed.")
         checkpoint = Checkpoint(self.event_count, update_id, state_hash)
@@ -414,6 +421,12 @@ class L2Writer:
         clean_shutdown: bool = True,
         extra: dict[str, object] | None = None,
     ) -> L2Metadata:
+        """Flush data, emit a final checkpoint contract, hash companions, and atomically publish
+        metadata.
+
+        Completeness is derived from shutdown and loss counters rather than asserted by the
+        caller.
+        """
         if self._closed:
             return read_metadata(self.path, verify_hashes=True)
         if not isinstance(clean_shutdown, bool):
@@ -504,6 +517,7 @@ class L2Writer:
         return read_metadata(self.path, verify_hashes=True)
 
     def abort(self) -> None:
+        """Close streams and remove all incomplete artifacts owned by this writer."""
         if self._closed:
             return
         if self._stream is not None:
@@ -516,6 +530,7 @@ class L2Writer:
         return self
 
     def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        """Abort unless the caller explicitly finalized the recording."""
         # Finalization needs the reconstructed final book state and must be
         # explicit. Always close an unfinalized writer so a context-manager
         # exit cannot leak file descriptors; the absent sidecar deliberately
@@ -525,6 +540,7 @@ class L2Writer:
 
 
 def _read_header(stream: BinaryIO) -> tuple[str, int]:
+    """Validate the fixed binary header and return symbol and creation timestamp."""
     raw = stream.read(HEADER_SIZE)
     if len(raw) != HEADER_SIZE:
         raise RuntimeError("L2 file does not contain a complete header.")
@@ -573,6 +589,11 @@ def _read_levels(
 # Replay revalidates framing and CRCs while decoding; corrupt bytes never become
 # typed market-data events merely because a metadata sidecar exists.
 def iter_events(path: str | Path) -> Iterator[L2Event]:
+    """Stream validated events from an L2 binary recording.
+
+    Every record is length-checked, CRC-checked, type-checked, and converted to fixed-point
+    domain objects.
+    """
     file_path = Path(path)
     with file_path.open("rb") as stream:
         _read_header(stream)
@@ -672,6 +693,7 @@ def read_checkpoints(
     path: str | Path,
     expected_created_unix_ns: int | None = None,
 ) -> tuple[Checkpoint, ...]:
+    """Read and validate the deterministic checkpoint companion file."""
     checkpoint_path = Path(path)
     with checkpoint_path.open("rb") as stream:
         header = stream.read(CHECKPOINT_HEADER_SIZE)
@@ -713,6 +735,10 @@ def read_checkpoints(
 # Metadata is treated as a contract, not decoration: schema fields, completion,
 # hashes, checkpoint identity, and terminal state are validated before downstream use.
 def read_metadata(path: str | Path, *, verify_hashes: bool = False) -> L2Metadata:
+    """Reconcile binary contents, checkpoint data, sidecar counters, and optional hashes.
+
+    A missing current-format sidecar is treated as interrupted or manually altered evidence.
+    """
     file_path = Path(path).expanduser().resolve()
     if not file_path.is_file():
         raise FileNotFoundError(f"L2 recording does not exist: {file_path}")

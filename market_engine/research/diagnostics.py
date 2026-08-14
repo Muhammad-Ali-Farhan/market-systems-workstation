@@ -13,6 +13,7 @@ FitFunction = Callable[[np.ndarray, np.ndarray, float], tuple[np.ndarray, float]
 
 @dataclass(frozen=True)
 class BootstrapSummary:
+    """Session-bootstrap confidence interval and non-positive-mean probability."""
     samples: int
     mean_ci_low: float
     mean_ci_high: float
@@ -21,6 +22,7 @@ class BootstrapSummary:
 
 @dataclass(frozen=True)
 class PermutationSummary:
+    """Observed statistic and its session-preserving permutation null distribution."""
     samples: int
     observed: float
     null_mean: float
@@ -108,6 +110,11 @@ def session_bootstrap_summary(
     samples: int = 2_000,
     seed: int = 0,
 ) -> BootstrapSummary:
+    """Estimate mean uncertainty by resampling whole sessions with replacement.
+
+    Session-level resampling preserves within-session dependence that row-wise bootstrap would
+    destroy.
+    """
     array = np.asarray(values, dtype=np.float64).reshape(-1)
     session_values = np.asarray(sessions, dtype=np.int64).reshape(-1)
     if array.size != session_values.size:
@@ -148,6 +155,10 @@ def circular_shift_permutation_test(
     samples: int = 1_000,
     seed: int = 0,
 ) -> PermutationSummary:
+    """Test alignment significance by circularly shifting predictions within each session.
+
+    The transformation breaks target alignment while retaining local serial structure.
+    """
     prediction_values, target_values = _finite_pair(prediction, target)
     raw_sessions = np.asarray(sessions, dtype=np.int64).reshape(-1)
     if raw_sessions.size != np.asarray(prediction).size:
@@ -192,6 +203,7 @@ def prediction_quantile_table(
     *,
     bins: int = 10,
 ) -> dict[str, object]:
+    """Summarize realized targets by ordered prediction quantile."""
     prediction_values, target_values = _finite_pair(prediction, target)
     if bins < 2:
         raise ValueError("At least two quantile bins are required.")
@@ -239,6 +251,7 @@ def prediction_quantile_table(
 
 
 def _population_stability_index(reference: np.ndarray, comparison: np.ndarray) -> float:
+    """Measure distribution shift using train-derived quantile bins."""
     reference_values = np.asarray(reference, dtype=np.float64)
     comparison_values = np.asarray(comparison, dtype=np.float64)
     reference_values = reference_values[np.isfinite(reference_values)]
@@ -262,6 +275,7 @@ def feature_drift_report(
     X_test: np.ndarray,
     feature_names: Sequence[str],
 ) -> dict[str, object]:
+    """Compare validation and test feature distributions against training."""
     train = np.asarray(X_train, dtype=np.float64)
     validation = np.asarray(X_validation, dtype=np.float64)
     test = np.asarray(X_test, dtype=np.float64)
@@ -416,6 +430,7 @@ def session_regression_table(
     target: np.ndarray,
     sessions: np.ndarray,
 ) -> dict[str, object]:
+    """Report predictive metrics separately for each chronological session."""
     prediction_values = np.asarray(prediction, dtype=np.float64).reshape(-1)
     target_values = np.asarray(target, dtype=np.float64).reshape(-1)
     session_values = np.asarray(sessions, dtype=np.int64).reshape(-1)
@@ -473,6 +488,7 @@ def coefficient_bootstrap_stability(
     samples: int = 500,
     seed: int = 0,
 ) -> dict[str, object]:
+    """Measure coefficient sign and magnitude stability across session bootstraps."""
     matrix = np.asarray(X, dtype=np.float64)
     target = np.asarray(y, dtype=np.float64).reshape(-1)
     session_values = np.asarray(sessions, dtype=np.int64).reshape(-1)
@@ -535,6 +551,7 @@ def cost_stress_curve(
     base_slippage_bps_per_side: float,
     extra_cost_bps_per_side: Sequence[float],
 ) -> list[dict[str, float | int]]:
+    """Reprice gross strategy outcomes under additional per-side execution costs."""
     gross = np.asarray(gross_pnl_bps, dtype=np.float64).reshape(-1)
     if not np.all(np.isfinite(gross)):
         raise ValueError("Gross PnL contains non-finite values.")
@@ -571,6 +588,7 @@ def _format_optional_number(value: object, format_spec: str) -> str:
     return format(number, format_spec)
 
 def render_research_card(report: dict[str, object]) -> str:
+    """Render the machine-readable research report as a concise Markdown evidence card."""
     methodology = report.get("methodology", {})
     samples = report.get("samples", {})
     model = report.get("selected_model", {})

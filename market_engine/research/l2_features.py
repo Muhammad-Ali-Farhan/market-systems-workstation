@@ -75,6 +75,7 @@ EPSILON = 1e-12
 
 @dataclass(frozen=True, slots=True)
 class FeatureObservation:
+    """One post-update feature vector with the market state needed for later labeling."""
     features: np.ndarray
     timestamp_ns: int
     update_id: int
@@ -89,6 +90,7 @@ class FeatureObservation:
 
 @dataclass(frozen=True, slots=True)
 class L2FeatureSet:
+    """Aligned multi-level features, labels, book state, and continuity-aware session IDs."""
     X: np.ndarray
     y: np.ndarray
     timestamps_ns: np.ndarray
@@ -119,6 +121,7 @@ def _imbalance(bid_quantity: float, ask_quantity: float) -> float:
 
 
 def _depth_slope(levels: tuple, best_price: int, *, bid_side: bool, limit: int) -> float:
+    """Fit cumulative log depth against distance from the best price."""
     selected = levels[:limit]
     if len(selected) < 2:
         return 0.0
@@ -142,6 +145,7 @@ def _depth_slope(levels: tuple, best_price: int, *, bid_side: bool, limit: int) 
 
 
 def _convexity(levels: tuple, near: int = 5, far: int = 20) -> float:
+    """Measure far-versus-near depth concentration on one side of the book."""
     near_quantity = sum(level.quantity for level in levels[:near]) / QUANTITY_SCALE
     far_quantity = sum(level.quantity for level in levels[:far]) / QUANTITY_SCALE
     return math.log((far_quantity + EPSILON) / (near_quantity + EPSILON))
@@ -163,6 +167,7 @@ class L2FeatureBuilder:
     # Reset rolling state at continuity boundaries so features/labels never bridge a
     # reconnect or sequence gap as if it were one continuous market session.
     def reset(self) -> None:
+        """Clear rolling state so features cannot cross a continuity boundary."""
         self._mid_history.clear()
         self._return_history.clear()
         self._timestamp_history.clear()
@@ -173,6 +178,7 @@ class L2FeatureBuilder:
         self._previous_best_ask = None
 
     def on_trade(self, trade: Trade) -> None:
+        """Add signed aggregate-trade quantity to the rolling trade-flow window."""
         quantity = trade.quantity / QUANTITY_SCALE
         # buyer_is_maker=True means the seller was the aggressor.
         signed = -quantity if trade.buyer_is_maker else quantity
@@ -183,6 +189,10 @@ class L2FeatureBuilder:
         book: L2OrderBook,
         update: DepthUpdate,
     ) -> FeatureObservation | None:
+        """Apply one depth event and build features from the resulting book state.
+
+        Pre-update quantities are retained only to distinguish additions from cancellations.
+        """
         old_bid_quantities = {
             level.price: book.quantity_at("bid", level.price) for level in update.bids
         }
@@ -378,6 +388,10 @@ def build_feature_set(
     horizon: int,
     require_complete: bool = True,
 ) -> L2FeatureSet:
+    """Replay recordings into session-aware Level-2 features and forward labels.
+
+    Boundary events finalize the current segment and reset both book and rolling feature state.
+    """
     if horizon <= 0:
         raise ValueError("horizon must be positive.")
     recording_paths = tuple(Path(value).expanduser().resolve() for value in recordings)

@@ -25,6 +25,8 @@
 #include "market_engine/recording/TopOfBookBinaryFormat.hpp"
 #include "market_engine/concurrency/SpscRingBuffer.hpp"
 
+// Non-blocking producer facade over a dedicated ordered disk-writer thread.
+// Completion metadata is published only after both binary streams close successfully.
 class BinaryRecorder {
 public:
     BinaryRecorder() = default;
@@ -35,6 +37,8 @@ public:
         stop();
     }
 
+    // Create new market/update-ID artifacts and start the writer thread. Existing
+    // paths are rejected so evidence can never be silently overwritten.
     void start(const std::string& file_path) {
         if (file_path.empty()) {
             throw std::invalid_argument("Recording file path cannot be empty.");
@@ -134,6 +138,8 @@ public:
         }
     }
 
+    // Enqueue one validated record without blocking the feed. Queue overflow is
+    // counted and marked so downstream metadata cannot label the capture complete.
     bool record(
         const OrderBookState& state,
         std::uint64_t exchange_update_id = 0) noexcept {
@@ -164,6 +170,7 @@ public:
         return true;
     }
 
+    // Mark a record index where downstream rolling state must reset.
     void mark_session_boundary(const std::string& reason) noexcept {
         add_marker(reason, accepted_records_.load(std::memory_order_relaxed));
     }
@@ -178,6 +185,8 @@ public:
         reconnect_count_ = reconnect_count;
     }
 
+    // Stop admission, drain the writer, flush both files, and atomically publish
+    // the sidecar describing completeness, losses, boundaries, and update-ID range.
     void stop() noexcept {
         active_.store(false, std::memory_order_release);
         if (worker_thread_.joinable()) {
