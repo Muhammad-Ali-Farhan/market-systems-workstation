@@ -36,6 +36,7 @@ from market_engine.market_data.l2_order_book import (
 
 @dataclass(frozen=True, slots=True)
 class ConnectionBoundary:
+    """Transport-generation boundary used to invalidate continuity across reconnects."""
     receipt_timestamp_ns: int
     generation: int
     connected: bool
@@ -68,6 +69,7 @@ def parse_stream_message(
     raw_message: str,
     receipt_timestamp_ns: int,
 ) -> tuple[str, DepthUpdate | Trade]:
+    """Parse one combined-stream message into a validated depth or trade event."""
     try:
         payload = json.loads(raw_message)
     except json.JSONDecodeError as exception:
@@ -106,6 +108,7 @@ def parse_stream_message(
 
 
 def fetch_snapshot(symbol: str, *, limit: int = 5_000, timeout_seconds: float = 10.0) -> Snapshot:
+    """Fetch and validate one Binance REST depth snapshot for synchronization."""
     if limit not in (5, 10, 20, 50, 100, 500, 1_000, 5_000):
         raise ValueError("Unsupported Binance depth snapshot limit.")
     query = urllib.parse.urlencode({"symbol": symbol.upper(), "limit": limit})
@@ -136,6 +139,7 @@ def fetch_snapshot(symbol: str, *, limit: int = 5_000, timeout_seconds: float = 
 
 @dataclass(slots=True)
 class ReconnectBackoff:
+    """Bounded exponential reconnect schedule reset by a successful transport open."""
     initial_delay_seconds: float = 0.5
     maximum_delay_seconds: float = 10.0
     current_delay_seconds: float = field(init=False)
@@ -168,6 +172,11 @@ class ReconnectBackoff:
 
 
 class CombinedStreamClient(threading.Thread):
+    """Own the Binance combined WebSocket connection and publish parsed events to a bounded queue.
+
+    Callbacks never perform synchronization or disk I/O; those responsibilities stay on the
+    consumer thread.
+    """
     def __init__(
         self,
         symbols: tuple[str, ...],
@@ -186,6 +195,7 @@ class CombinedStreamClient(threading.Thread):
         self.last_error = ""
 
     def request_stop(self) -> None:
+        """Signal shutdown and close the active WebSocket to unblock the thread."""
         self.stop_event.set()
         websocket = self._websocket
         if websocket is not None:
@@ -195,6 +205,7 @@ class CombinedStreamClient(threading.Thread):
                 pass
 
     def _emit(self, symbol: str | None, event: StreamEvent) -> None:
+        """Publish without blocking; overflow is counted as evidence loss."""
         # The queue is bounded on purpose. Dropping is observable and later invalidates
         # the capture rather than allowing unbounded memory growth under backpressure.
         try:
@@ -203,6 +214,7 @@ class CombinedStreamClient(threading.Thread):
             self.queue_drop_callback()
 
     def run(self) -> None:
+        """Reconnect, parse, and enqueue stream events until shutdown is requested."""
         try:
             import websocket
         except ImportError:
@@ -280,6 +292,7 @@ class CombinedStreamClient(threading.Thread):
 
 @dataclass(slots=True)
 class SymbolCapture:
+    """Per-symbol synchronization, recording, checkpoint, and recovery state."""
     symbol: str
     writer: L2Writer
     synchronizer: DepthSynchronizer = field(default_factory=DepthSynchronizer)
@@ -303,6 +316,7 @@ class SymbolCapture:
             raise ValueError("snapshot_attempt_limit must be positive.")
 
     def connection_boundary(self, receipt_timestamp_ns: int, connected: bool) -> None:
+        """Record a transport boundary and require a fresh snapshot bridge."""
         # Reconnects break continuity even when the next message looks well formed, so
         # record the boundary and force a fresh snapshot bridge.
         reason = (
@@ -313,6 +327,7 @@ class SymbolCapture:
         self.pending_snapshot = None
 
     def _record_applied(self, update: DepthUpdate) -> None:
+        """Persist one sequence-validated update and emit periodic state checkpoints."""
         # Only sequence-validated deltas reach disk/checkpoints. This keeps replay from
         # legitimizing events that the live synchronizer never accepted.
         self.writer.write(update)
@@ -325,6 +340,7 @@ class SymbolCapture:
             self.depth_since_checkpoint = 0
 
     def _install_snapshot(self, snapshot: Snapshot) -> SnapshotResult:
+        """Handle snapshot-bridge outcomes and retain recoverable buffered state."""
         result = self.synchronizer.install_snapshot(snapshot)
         if result.result is SnapshotResult.SNAPSHOT_TOO_OLD:
             # The buffered stream starts after the snapshot's required next ID; fetch a
@@ -355,6 +371,7 @@ class SymbolCapture:
         return result.result
 
     def synchronize(self) -> bool:
+        """Drive bounded REST-snapshot attempts until live or awaiting a future bridge."""
         if not self.synchronizer.buffered_events:
             return False
 
@@ -378,6 +395,7 @@ class SymbolCapture:
         )
 
     def on_depth(self, update: DepthUpdate) -> None:
+        """Ingest a depth update and trigger recording or resynchronization as required."""
         result = self.synchronizer.ingest(update)
         if result is ApplyResult.APPLIED:
             self._record_applied(update)
@@ -393,6 +411,7 @@ class SymbolCapture:
             self.synchronize()
 
     def on_trade(self, trade: Trade) -> None:
+        """Record trades only while the corresponding book is synchronized and live."""
         if self.synchronizer.state is SyncState.LIVE:
             self.writer.write(trade)
         else:
@@ -407,6 +426,11 @@ def capture(
     checkpoint_interval: int,
     queue_capacity: int,
 ) -> list[Path]:
+    """Capture multiple symbols into independently finalized Level-2 recordings.
+
+    Queue loss, malformed messages, shutdown failures, and continuity boundaries remain
+    observable in metadata.
+    """
     output_directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     captures = {

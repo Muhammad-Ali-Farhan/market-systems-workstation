@@ -68,6 +68,7 @@ public:
         last_update_id_ = 0;
     }
 
+    // Replace the complete reference book and validate the resulting two-sided state.
     void install_snapshot(const Snapshot& snapshot) {
         clear();
         if (snapshot.last_update_id == 0) {
@@ -83,6 +84,7 @@ public:
         validate_or_throw();
     }
 
+    // Apply absolute per-price quantities; zero quantity removes the corresponding level.
     void apply(const DepthUpdate& update) {
         validate_update(update);
         for (const auto& level : update.bids) {
@@ -185,6 +187,7 @@ public:
         asks_.reserve(levels_per_side);
     }
 
+    // Replace the complete flat book, normalizing side order and duplicate price levels.
     void install_snapshot(const Snapshot& snapshot) {
         clear();
         if (snapshot.last_update_id == 0) {
@@ -196,6 +199,7 @@ public:
         validate_or_throw();
     }
 
+    // Apply absolute quantities with binary search plus contiguous insert/erase operations.
     void apply(const DepthUpdate& update) {
         validate_update(update);
         for (const auto& level : update.bids) {

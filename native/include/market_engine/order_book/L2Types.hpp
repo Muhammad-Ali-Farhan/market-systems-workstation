@@ -19,6 +19,7 @@ inline constexpr std::int64_t PriceScale = 100'000'000LL;
 inline constexpr std::uint64_t QuantityScale = 100'000'000ULL;
 inline constexpr int ScaleDecimals = 8;
 
+// One exact price level. Quantity zero is permitted in deltas as a deletion signal.
 struct Level {
     std::int64_t price{0};
     std::uint64_t quantity{0};
@@ -26,6 +27,7 @@ struct Level {
     friend bool operator==(const Level&, const Level&) = default;
 };
 
+// Complete exchange book image associated with last_update_id.
 struct Snapshot {
     std::uint64_t receipt_timestamp_ns{0};
     std::uint64_t last_update_id{0};
@@ -33,6 +35,7 @@ struct Snapshot {
     std::vector<Level> asks;
 };
 
+// Incremental changes covering the inclusive [first_update_id, final_update_id] range.
 struct DepthUpdate {
     std::uint64_t receipt_timestamp_ns{0};
     std::uint64_t event_time_ms{0};
@@ -42,6 +45,7 @@ struct DepthUpdate {
     std::vector<Level> asks;
 };
 
+// Aggregate-trade event; buyer_is_maker identifies the passive side of the trade.
 struct Trade {
     std::uint64_t receipt_timestamp_ns{0};
     std::uint64_t event_time_ms{0};
@@ -51,6 +55,7 @@ struct Trade {
     bool buyer_is_maker{false};
 };
 
+// Parse a non-negative decimal without rounding into an exact scaled integer.
 inline bool parse_fixed_decimal(
     std::string_view text,
     std::uint64_t scale,
@@ -156,6 +161,7 @@ inline void validate_level(const Level& level, bool allow_zero_quantity = true) 
     }
 }
 
+// Validate event-local structure; cross-event continuity belongs to the synchronizer.
 inline void validate_update(const DepthUpdate& update) {
     if (update.first_update_id == 0 ||
         update.final_update_id == 0 ||

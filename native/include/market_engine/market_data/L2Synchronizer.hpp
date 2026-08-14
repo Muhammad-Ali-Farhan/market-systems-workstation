@@ -41,6 +41,8 @@ struct SnapshotInstallResult {
     std::size_t first_applied_buffer_index{0};
 };
 
+// Stateful Binance snapshot/delta synchronizer. The class is the sole owner of
+// buffered-event ordering, bridge acceptance, live continuity, and gap transitions.
 class Synchronizer {
 public:
     explicit Synchronizer(std::size_t maximum_buffered_events = 200'000)
@@ -51,6 +53,7 @@ public:
         book_.reserve(5'000);
     }
 
+    // Discard reconstructed state and buffered deltas before beginning a fresh snapshot cycle.
     void reset() noexcept {
         state_ = SyncState::awaiting_snapshot;
         book_.clear();
@@ -58,6 +61,7 @@ public:
         ++reset_count_;
     }
 
+    // Buffer while unsynchronized; once live, apply only stale-safe and continuous deltas.
     ApplyResult ingest(const DepthUpdate& update) {
         validate_update(update);
         if (state_ != SyncState::live) {
@@ -67,6 +71,8 @@ public:
         return apply_live(update);
     }
 
+    // Attempt to bridge the buffered WebSocket stream to one REST snapshot.
+    // The return value reports exactly how much buffered history was discarded or applied.
     SnapshotInstallResult install_snapshot(const Snapshot& snapshot) {
         if (snapshot.last_update_id == 0) {
             throw std::invalid_argument("Snapshot update ID must be positive.");

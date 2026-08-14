@@ -62,6 +62,7 @@ MINIMUM_PARTITION_ROWS = 100
 
 @dataclass(frozen=True)
 class RegressionMetrics:
+    """Predictive accuracy, calibration, direction, and coverage metrics."""
     samples: int
     mse: float
     mae: float
@@ -83,6 +84,7 @@ class RegressionMetrics:
 
 @dataclass(frozen=True)
 class StrategyMetrics:
+    """Execution-aware return, risk, cost, and session-robustness metrics."""
     trades: int
     win_rate: float
     mean_pnl_bps: float
@@ -108,6 +110,7 @@ class StrategyMetrics:
 
 @dataclass(frozen=True)
 class ExecutionAssumptions:
+    """Explicit fees, slippage, size, and displayed-liquidity participation assumptions."""
     fee_bps_per_side: float
     slippage_bps_per_side: float = 0.0
     trade_size_base: float = 0.0
@@ -136,6 +139,7 @@ class ExecutionAssumptions:
 
 @dataclass(frozen=True)
 class TradeResults:
+    """Selected rows and aligned gross/net outcomes from one signal policy."""
     net_pnl_bps: np.ndarray
     gross_pnl_bps: np.ndarray
     selected_rows: np.ndarray
@@ -147,6 +151,7 @@ class TradeResults:
 
 @dataclass(frozen=True)
 class SplitIndices:
+    """Chronological train, validation, and test row ownership plus purge metadata."""
     train: np.ndarray
     validation: np.ndarray
     test: np.ndarray
@@ -159,6 +164,7 @@ class SplitIndices:
 
 @dataclass(frozen=True)
 class PreparedRecording:
+    """Validated top-of-book source identity and derived continuity segments."""
     metadata: RecordingMetadata
     sha256: str
     segment_session_ids: tuple[int, ...]
@@ -270,6 +276,7 @@ def _prior_holdout_reports(
     test_period_fingerprint: str,
     test_set_fingerprint: str,
 ) -> list[Path]:
+    """Find prior reports that reused either the raw or feature-specific holdout."""
     matches: list[Path] = []
     if not report_directory.exists():
         return matches
@@ -301,6 +308,10 @@ def prepare_feature_data(
     allow_incomplete: bool = False,
     progress: ProgressCallback | None = None,
 ) -> tuple[FeatureSet, tuple[PreparedRecording, ...]]:
+    """Validate recordings, segment discontinuities, and build one aligned feature set.
+
+    By default only complete captures are admitted, and duplicate content hashes are rejected.
+    """
     if horizon <= 0:
         raise ValueError("Prediction horizon must be positive.")
     if max_gap_ns <= 0:
@@ -405,6 +416,10 @@ def _session_row_ranges(data: FeatureSet) -> list[tuple[int, int, int]]:
 
 
 def make_chronological_split(data: FeatureSet, purge_size: int) -> SplitIndices:
+    """Assign whole sessions to train, validation, and test with boundary purging.
+
+    Purging prevents forward labels near a split from reading into the next partition.
+    """
     # Split by whole chronological sessions whenever possible. Purge rows at boundaries
     # so label horizons cannot leak future information across train/validation/test.
     if purge_size < 0:
@@ -483,6 +498,7 @@ def make_chronological_split(data: FeatureSet, purge_size: int) -> SplitIndices:
 def standardize_training_data(
     X_train: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit mean and scale on training rows and return clipped standardized data."""
     mean = np.mean(X_train, axis=0, dtype=np.float64)
     scale = np.std(X_train, axis=0, ddof=0, dtype=np.float64)
     scale = np.where(scale > 1e-12, scale, 1.0)
@@ -494,6 +510,7 @@ def standardize_with_parameters(
     mean: np.ndarray,
     scale: np.ndarray,
 ) -> np.ndarray:
+    """Apply previously fitted normalization without re-estimating it."""
     return np.clip((X - mean) / scale, -20.0, 20.0)
 
 
@@ -502,6 +519,7 @@ def fit_ridge(
     y: np.ndarray,
     alpha: float,
 ) -> tuple[np.ndarray, float]:
+    """Fit a ridge-regularized linear model with an unpenalized intercept."""
     matrix = np.asarray(X_standardized, dtype=np.float64)
     target = np.asarray(y, dtype=np.float64).reshape(-1)
     if matrix.ndim != 2 or matrix.shape[0] != target.size:
@@ -538,6 +556,7 @@ def pearson_correlation(left: np.ndarray, right: np.ndarray) -> float:
 
 
 def regression_metrics(prediction: np.ndarray, target: np.ndarray) -> RegressionMetrics:
+    """Compute predictive, directional, coverage, and goodness-of-fit metrics."""
     prediction_values = np.asarray(prediction, dtype=np.float64).reshape(-1)
     target_values = np.asarray(target, dtype=np.float64).reshape(-1)
     if prediction_values.size != target_values.size or prediction_values.size == 0:
@@ -591,6 +610,10 @@ def strategy_trades(
     threshold: float,
     execution: ExecutionAssumptions,
 ) -> TradeResults:
+    """Convert predictions into capacity-aware long/short trade outcomes.
+
+    Visible bid/ask quantities cap executable size; rejected rows remain observable.
+    """
     execution.validate()
     forecast_values = np.asarray(prediction, dtype=np.float64).reshape(-1)
     row_indices = np.asarray(indices, dtype=np.int64).reshape(-1)
@@ -679,6 +702,7 @@ def strategy_pnls(
     trade_size_base: float = 0.0,
     max_displayed_participation: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compatibility wrapper returning net PnL for selected strategy trades."""
     trades = strategy_trades(
         prediction,
         data,
@@ -704,6 +728,7 @@ def strategy_metrics(
     bootstrap_samples: int = 2_000,
     bootstrap_seed: int = 0,
 ) -> StrategyMetrics:
+    """Summarize returns, drawdown, costs, dependence-adjusted confidence, and tails."""
     net = np.asarray(pnl, dtype=np.float64).reshape(-1)
     session_values = np.asarray(sessions, dtype=np.int32).reshape(-1)
     gross = net.copy() if gross_pnl is None else np.asarray(gross_pnl, dtype=np.float64).reshape(-1)
@@ -810,6 +835,7 @@ def select_signal_threshold(
     bootstrap_samples: int = 2_000,
     bootstrap_seed: int = 0,
 ) -> tuple[float, StrategyMetrics]:
+    """Choose a threshold using validation-only execution-aware performance."""
     execution = ExecutionAssumptions(
         fee_bps_per_side=fee_bps_per_side,
         slippage_bps_per_side=slippage_bps_per_side,
@@ -893,6 +919,7 @@ def choose_ridge_alpha(
     X_validation: np.ndarray,
     y_validation: np.ndarray,
 ) -> tuple[float, np.ndarray, float, list[dict[str, float]]]:
+    """Choose ridge regularization by validation error and return the fitted candidate."""
     best: tuple[float, float, np.ndarray, float] | None = None
     search: list[dict[str, float]] = []
     for alpha in RIDGE_GRID:
@@ -960,6 +987,7 @@ def _evaluate_baseline(
     bootstrap_samples: int,
     bootstrap_seed: int,
 ) -> dict[str, object]:
+    """Evaluate one fixed baseline signal without fitting model parameters."""
     validation_signal = np.asarray(signal[split.validation], dtype=np.float64)
     test_signal = np.asarray(signal[split.test], dtype=np.float64)
     threshold, validation_metrics = select_signal_threshold(
@@ -1004,6 +1032,10 @@ def pretest_walk_forward_diagnostics(
     bootstrap_samples: int,
     bootstrap_seed: int,
 ) -> dict[str, object]:
+    """Run expanding-window diagnostics using only data available before the final holdout.
+
+    These diagnostics assess stability without consuming test outcomes for selection.
+    """
     ordered_ranges = _session_row_ranges(data)
     pretest_set = set((*split.train_sessions, *split.validation_sessions))
     pretest_sessions = [session for session, _start, _stop in ordered_ranges if session in pretest_set]
@@ -1158,6 +1190,7 @@ def save_predictions(
     threshold: float,
     trades: TradeResults | None = None,
 ) -> None:
+    """Write row-level predictions, decisions, market state, and realized outcomes."""
     path = Path(file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     trade_lookup: dict[int, tuple[float, float, int, float]] = {}
@@ -1234,6 +1267,7 @@ def _publish_staged_artifacts(
     *,
     overwrite: bool,
 ) -> None:
+    """Commit a set of staged artifacts with rollback on partial publication."""
     if not commit_pairs:
         return
     destinations = [destination for _, destination in commit_pairs]
@@ -1329,6 +1363,11 @@ def train_and_evaluate(
     allow_test_reuse: bool = False,
     progress: ProgressCallback | None = None,
 ) -> dict[str, object]:
+    """Train, validate, holdout-test, diagnose, and atomically publish a top-of-book model.
+
+    The workflow records source hashes, split ownership, test fingerprints, and exact model-
+    selection evidence.
+    """
     execution = ExecutionAssumptions(
         fee_bps_per_side=fee_bps_per_side,
         slippage_bps_per_side=slippage_bps_per_side,

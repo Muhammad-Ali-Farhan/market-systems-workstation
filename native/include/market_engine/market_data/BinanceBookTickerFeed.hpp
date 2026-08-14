@@ -45,6 +45,8 @@ namespace net = boost::asio;
 namespace ssl = boost::asio::ssl;
 using tcp = net::ip::tcp;
 
+// Owns DNS, TCP, TLS, WebSocket, parsing, reconnect, and top-of-book publication.
+// The optional recorder receives only records that passed parsing and semantic validation.
 class BinanceFeed {
 public:
     BinanceFeed(
@@ -59,6 +61,7 @@ public:
           reconnect_count_(reconnect_count),
           recorder_(recorder) {}
 
+    // Cancel active network operations so lifecycle shutdown does not wait for I/O timeouts.
     void request_stop() noexcept {
         std::lock_guard lock(operation_mutex_);
         if (active_resolver_ != nullptr) {
@@ -77,6 +80,8 @@ public:
         return last_error_;
     }
 
+    // Maintain the connection until shutdown, applying bounded exponential backoff after faults.
+    // Errors are retained for the owning engine rather than escaping the worker thread.
     void run(std::atomic<bool>& running) noexcept {
         std::chrono::milliseconds reconnect_delay{500};
 

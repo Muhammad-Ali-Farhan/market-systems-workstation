@@ -29,6 +29,11 @@ def _validate_u64(name: str, value: int, *, positive: bool = False) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Level:
+    """One fixed-point Level-2 price level.
+
+    A zero quantity is valid in depth messages because the exchange uses it as a level-deletion
+    signal.
+    """
     price: int
     quantity: int
 
@@ -45,6 +50,7 @@ class Level:
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
+    """Complete fixed-point order-book state associated with one exchange update ID."""
     receipt_timestamp_ns: int
     last_update_id: int
     bids: tuple[Level, ...]
@@ -57,6 +63,7 @@ class Snapshot:
 
 @dataclass(frozen=True, slots=True)
 class DepthUpdate:
+    """Incremental Level-2 changes covering an inclusive exchange update-ID range."""
     receipt_timestamp_ns: int
     event_time_ms: int
     first_update_id: int
@@ -75,6 +82,7 @@ class DepthUpdate:
 
 @dataclass(frozen=True, slots=True)
 class Trade:
+    """Validated Binance aggregate-trade event expressed in fixed-point units."""
     receipt_timestamp_ns: int
     event_time_ms: int
     aggregate_trade_id: int
@@ -94,6 +102,11 @@ class Trade:
 
 
 def parse_fixed_decimal(value: str | int | float | Decimal, scale: int) -> int:
+    """Convert a non-negative decimal value to an exact scaled integer.
+
+    The conversion rejects rounding, non-finite values, and values outside the 64-bit binary
+    contract.
+    """
     if isinstance(scale, bool) or not isinstance(scale, int) or scale <= 0:
         raise ValueError("Scale must be a positive integer.")
     if isinstance(value, bool):
@@ -169,6 +182,7 @@ class L2OrderBook:
         self.last_update_id = 0
 
     def install_snapshot(self, snapshot: Snapshot) -> None:
+        """Replace the complete book with a validated exchange snapshot."""
         bids: dict[int, int] = {}
         asks: dict[int, int] = {}
         for level in snapshot.bids:
@@ -187,6 +201,7 @@ class L2OrderBook:
         self.validate()
 
     def apply(self, update: DepthUpdate) -> None:
+        """Apply one incremental update and advance the local update ID."""
         for level in update.bids:
             self._set_level(self._bids, level)
         for level in update.asks:
@@ -241,6 +256,7 @@ class L2OrderBook:
         raise ValueError("Side must be 'bid' or 'ask'.")
 
     def validate(self) -> None:
+        """Enforce the two-sided, positive-quantity, non-crossed book invariant."""
         if not self._bids or not self._asks:
             raise RuntimeError("L2 order book must remain two-sided.")
         if any(price <= 0 or quantity <= 0 for price, quantity in self._bids.items()):
@@ -251,6 +267,11 @@ class L2OrderBook:
             raise RuntimeError("L2 order book is crossed or locked.")
 
     def state_hash(self) -> int:
+        """Return the deterministic logical-state fingerprint shared with the native book.
+
+        This hash supports replay and implementation-parity checks; it is not a cryptographic
+        integrity primitive.
+        """
         # FNV-1a gives a deterministic logical-state fingerprint shared with C++.
         # It is used for replay/parity checks, not as a cryptographic integrity hash.
         value = 14_695_981_039_346_656_037
@@ -274,12 +295,14 @@ class L2OrderBook:
 
 
 class SyncState(str, enum.Enum):
+    """Lifecycle state of snapshot-based Level-2 reconstruction."""
     AWAITING_SNAPSHOT = "awaiting_snapshot"
     LIVE = "live"
     GAP = "gap"
 
 
 class ApplyResult(str, enum.Enum):
+    """Outcome of ingesting one incremental depth event."""
     APPLIED = "applied"
     IGNORED_STALE = "ignored_stale"
     BUFFERED = "buffered"
@@ -287,6 +310,7 @@ class ApplyResult(str, enum.Enum):
 
 
 class SnapshotResult(str, enum.Enum):
+    """Outcome of attempting to bridge buffered events to a snapshot."""
     SYNCHRONIZED = "synchronized"
     AWAITING_BRIDGE = "awaiting_bridge"
     SNAPSHOT_TOO_OLD = "snapshot_too_old"
@@ -295,6 +319,7 @@ class SnapshotResult(str, enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class SnapshotInstallResult:
+    """Snapshot-install outcome plus the exact buffered events accepted afterward."""
     result: SnapshotResult
     stale_events: int
     applied_events: tuple[DepthUpdate, ...]
@@ -322,6 +347,7 @@ class DepthSynchronizer:
         return tuple(self._buffer)
 
     def reset(self, *, preserve_buffer: bool = False) -> None:
+        """Return to snapshot acquisition, optionally retaining unprocessed events."""
         existing = self._buffer if preserve_buffer else deque()
         self.book.clear()
         self._buffer = existing
@@ -329,12 +355,18 @@ class DepthSynchronizer:
         self.reset_count += 1
 
     def ingest(self, update: DepthUpdate) -> ApplyResult:
+        """Buffer an event before synchronization or apply it to a live book."""
         if self.state is not SyncState.LIVE:
             self._buffer_event(update)
             return ApplyResult.BUFFERED
         return self._apply_live(update)
 
     def install_snapshot(self, snapshot: Snapshot) -> SnapshotInstallResult:
+        """Attempt to bridge the buffered stream to a REST snapshot.
+
+        The book becomes live only when the first retained event spans snapshot.last_update_id +
+        1.
+        """
         # Drop deltas already represented by the snapshot before testing the bridge.
         # Applying them again would duplicate historical state transitions.
         stale = 0
@@ -393,6 +425,7 @@ class DepthSynchronizer:
         )
 
     def _buffer_event(self, update: DepthUpdate) -> None:
+        """Append one event while enforcing capacity and arrival-order invariants."""
         if len(self._buffer) >= self.maximum_buffered_events:
             self.state = SyncState.GAP
             raise RuntimeError("L2 synchronization buffer capacity exceeded.")
@@ -402,6 +435,7 @@ class DepthSynchronizer:
         self._buffer.append(update)
 
     def _apply_live(self, update: DepthUpdate) -> ApplyResult:
+        """Apply a continuous live update, ignore stale data, or enter gap recovery."""
         local = self.book.last_update_id
         if update.final_update_id <= local:
             return ApplyResult.IGNORED_STALE

@@ -62,6 +62,7 @@ UINT32_MAX = int(np.iinfo(np.uint32).max)
 
 @dataclass(frozen=True)
 class FeatureSet:
+    """Aligned feature, label, market-state, and session arrays for chronological research."""
     X: np.ndarray
     y: np.ndarray
     timestamps_ns: np.ndarray
@@ -141,6 +142,11 @@ class AlphaModel:
         *,
         overwrite: bool = False,
     ) -> None:
+        """Atomically persist the model, feature schema, normalization, and provenance.
+
+        The temporary-file replacement prevents partially written artifacts from appearing
+        valid.
+        """
         self._validate()
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -190,6 +196,7 @@ class AlphaModel:
 
     @staticmethod
     def load(file_path: str | Path) -> "AlphaModel":
+        """Load and validate a current or supported legacy model artifact."""
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Model artifact does not exist: {path}")
@@ -283,6 +290,7 @@ class AlphaModel:
         return model
 
     def _validate(self) -> None:
+        """Enforce schema, shape, finiteness, and parameter-domain invariants."""
         if self.feature_names != FEATURE_NAMES:
             raise RuntimeError("Model feature definition does not match this code.")
         expected = (len(FEATURE_NAMES),)
@@ -330,6 +338,7 @@ def _lagged_difference(values: np.ndarray, lag: int) -> np.ndarray:
 
 
 def _rolling_std(values: np.ndarray, window: int) -> np.ndarray:
+    """Compute population rolling standard deviation without future leakage."""
     output = np.full(values.size, np.nan, dtype=np.float64)
     if values.size <= window:
         return output
@@ -355,6 +364,11 @@ def build_feature_set(
     horizon: int,
     session_id: int,
 ) -> FeatureSet:
+    """Build aligned top-of-book features and forward-return labels for one session.
+
+    All features use current or historical rows; labels alone read the configured future
+    horizon.
+    """
     if horizon <= 0:
         raise ValueError("Prediction horizon must be positive.")
     if not math.isfinite(volume_scale) or volume_scale <= 0.0:
@@ -509,6 +523,7 @@ def build_feature_set(
 
 
 def concatenate_feature_sets(feature_sets: Iterable[FeatureSet]) -> FeatureSet:
+    """Concatenate compatible session feature sets while preserving row alignment."""
     sets = tuple(feature_sets)
     if not sets:
         raise ValueError("No feature sets were supplied.")
@@ -542,6 +557,7 @@ def concatenate_feature_sets(feature_sets: Iterable[FeatureSet]) -> FeatureSet:
 
 @dataclass(frozen=True)
 class BookTick:
+    """One validated top-of-book observation in display units."""
     timestamp_ns: int
     best_bid: float
     best_ask: float
@@ -568,6 +584,7 @@ class OnlineFeatureBuilder:
         self._reset_count = 0
 
     def reset(self) -> None:
+        """Discard rolling history at a discontinuity boundary."""
         if self._history:
             self._reset_count += 1
         self._history.clear()
@@ -597,6 +614,11 @@ class OnlineFeatureBuilder:
         bid_volume: int,
         ask_volume: int,
     ) -> np.ndarray | None:
+        """Validate one tick and emit the canonical online feature vector when history is warm.
+
+        Timestamp regressions or long gaps reset history so features never bridge discontinuous
+        sessions.
+        """
         timestamp = int(timestamp_ns)
         bid = float(best_bid)
         ask = float(best_ask)

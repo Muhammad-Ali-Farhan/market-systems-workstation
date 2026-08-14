@@ -13,6 +13,8 @@
 
 #include "market_engine/core/TopOfBookState.hpp"
 
+// Bounded lock-free queue with one producer endpoint and one consumer endpoint.
+// Capacity is fixed at compile time so publication never allocates on the hot path.
 template <std::size_t Capacity, typename Value = OrderBookState>
 class SPSCRingBuffer {
 public:
@@ -27,6 +29,7 @@ public:
         std::is_trivially_copyable_v<Value>,
         "SPSC queue values must be trivially copyable.");
 
+    // Publish one value; returns false rather than blocking when the queue is full.
     bool push(const Value& value) noexcept {
         // SPSC ownership invariant: only the producer writes tail_, so its own
         // current tail needs no synchronization. The acquire of head_ observes
@@ -43,6 +46,7 @@ public:
         return true;
     }
 
+    // Copy up to maximum_count published values in FIFO order into caller-owned storage.
     std::size_t consume_batch(
         Value* destination,
         std::size_t maximum_count) noexcept {
@@ -81,6 +85,7 @@ public:
     }
 
     // Only call this when neither producer nor consumer is using the queue.
+    // Resetting retains the allocated storage and only rewinds the endpoint indices.
     void reset() noexcept {
         head_.store(0, std::memory_order_relaxed);
         tail_.store(0, std::memory_order_relaxed);

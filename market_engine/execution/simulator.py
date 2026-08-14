@@ -26,16 +26,19 @@ from market_engine.market_data.l2_order_book import (
 
 
 class Side(str, enum.Enum):
+    """Economic side of an order or fill."""
     BUY = "buy"
     SELL = "sell"
 
 
 class OrderType(str, enum.Enum):
+    """Supported simulated order instructions."""
     MARKET = "market"
     LIMIT = "limit"
 
 
 class OrderStatus(str, enum.Enum):
+    """Lifecycle state of a simulated order."""
     PENDING = "pending"
     OPEN = "open"
     PARTIALLY_FILLED = "partially_filled"
@@ -46,6 +49,7 @@ class OrderStatus(str, enum.Enum):
 
 
 class QueueModel(str, enum.Enum):
+    """Explicit passive-fill assumption applied to aggregate Level-2 depletion."""
     TRADE_ONLY = "trade_only"
     PRO_RATA_DEPTH = "pro_rata_depth"
     OPTIMISTIC_DEPTH = "optimistic_depth"
@@ -53,6 +57,7 @@ class QueueModel(str, enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class ExecutionConfig:
+    """Validated latency, fee, queue, risk, and markout assumptions."""
     decision_latency_ns: int = 0
     transmission_latency_ns: int = 250_000
     cancel_latency_ns: int = 250_000
@@ -110,6 +115,7 @@ class ExecutionConfig:
 
 @dataclass(frozen=True, slots=True)
 class OrderRequest:
+    """Immutable strategy decision submitted to the simulated venue timeline."""
     order_id: str
     decision_timestamp_ns: int
     side: Side
@@ -153,6 +159,7 @@ class OrderRequest:
 
 @dataclass(frozen=True, slots=True)
 class CancelRequest:
+    """Cancellation decision that reaches the venue after configured latency."""
     order_id: str
     decision_timestamp_ns: int
 
@@ -170,6 +177,7 @@ class CancelRequest:
 
 @dataclass(slots=True)
 class SimulatedOrder:
+    """Mutable venue-side state for one accepted, rejected, or completed request."""
     request: OrderRequest
     arrival_timestamp_ns: int
     expiry_timestamp_ns: int | None
@@ -185,6 +193,7 @@ class SimulatedOrder:
 
 @dataclass(slots=True)
 class Fill:
+    """One maker or taker execution with fee and delayed markout observations."""
     order_id: str
     timestamp_ns: int
     side: Side
@@ -205,6 +214,7 @@ class Fill:
 
 @dataclass(frozen=True, slots=True)
 class SimulationResult:
+    """Immutable final state and event history from one replay simulation."""
     orders: tuple[SimulatedOrder, ...]
     fills: tuple[Fill, ...]
     ending_position: int
@@ -214,6 +224,7 @@ class SimulationResult:
     killed: bool
 
     def summary(self) -> dict[str, object]:
+        """Aggregate fills, statuses, position, equity, fees, and signed markouts."""
         requested = sum(order.request.quantity for order in self.orders)
         filled = sum(fill.quantity for fill in self.fills)
         maker_quantity = sum(fill.quantity for fill in self.fills if fill.maker)
@@ -275,6 +286,7 @@ class ExecutionSimulator:
         self._has_run = False
 
     def submit(self, request: OrderRequest) -> None:
+        """Schedule an order decision while enforcing globally unique order IDs."""
         if request.order_id in self.orders or any(
             item.order_id == request.order_id for item in self._pending_requests
         ):
@@ -283,6 +295,7 @@ class ExecutionSimulator:
         self._pending_requests.sort(key=lambda item: (item.decision_timestamp_ns, item.order_id))
 
     def cancel(self, request: CancelRequest) -> None:
+        """Schedule a cancellation on the shared chronological control timeline."""
         arrival = request.decision_timestamp_ns + self.config.cancel_latency_ns
         if arrival > UINT64_MAX:
             raise OverflowError("Cancel arrival timestamp exceeds 64-bit storage.")
@@ -292,6 +305,11 @@ class ExecutionSimulator:
     # Reject incomplete or hash-invalid evidence before fill logic begins; execution
     # assumptions are only meaningful on a trustworthy reconstructed market stream.
     def run(self, recording: str | Path) -> SimulationResult:
+        """Replay one complete hash-verified recording and execute all scheduled controls.
+
+        At equal timestamps, the recorded market event is processed before arriving orders or
+        cancels.
+        """
         if self._has_run:
             raise RuntimeError("One ExecutionSimulator instance can run only once.")
         metadata = read_metadata(recording, verify_hashes=True)
@@ -375,6 +393,7 @@ class ExecutionSimulator:
         return arrival < timestamp_ns or (inclusive and arrival == timestamp_ns)
 
     def _process_controls(self, timestamp_ns: int, *, inclusive: bool) -> None:
+        """Process order and cancel arrivals in one chronological sequence."""
         # Arrivals, cancels, and expirations share one chronological control timeline.
         # Processing all arrivals before all cancels can create impossible fills.
         while True:
@@ -411,6 +430,7 @@ class ExecutionSimulator:
                 self._process_next_cancel()
 
     def _activate_next_request(self, arrival: int) -> None:
+        """Create venue-side order state and route marketable or passive flow."""
         request = self._pending_requests.pop(0)
         expiry = self._expiry_timestamp(arrival, request.time_to_live_ns)
         order = SimulatedOrder(request, arrival, expiry)
@@ -464,6 +484,7 @@ class ExecutionSimulator:
         *,
         limit_price: int | None = None,
     ) -> None:
+        """Walk currently reusable visible liquidity in exchange price priority."""
         levels = self.book.asks() if order.request.side is Side.BUY else self.book.bids()
         remaining = order.remaining_quantity
         book_side = "ask" if order.request.side is Side.BUY else "bid"
@@ -493,6 +514,7 @@ class ExecutionSimulator:
             order.rejection_reason = "insufficient_visible_depth"
 
     def _refresh_consumed_liquidity(self, update: DepthUpdate) -> None:
+        """Allow local liquidity reuse only when that exact level is refreshed."""
         # Only an explicitly refreshed level receives new displayed-liquidity
         # identity. An unrelated update on the opposite side must not allow a
         # later simulated order to reuse quantity already consumed locally.
@@ -504,6 +526,7 @@ class ExecutionSimulator:
     # L2 does not reveal exact order-level queue position. Passive fills therefore
     # use explicit queue-ahead assumptions and must be interpreted as sensitivity output.
     def _process_trade(self, trade: Trade) -> None:
+        """Advance passive queues and fill eligible orders from aggregate trades."""
         if not self._active_order_ids:
             return
         aggressor_side = Side.SELL if trade.buyer_is_maker else Side.BUY
@@ -546,6 +569,7 @@ class ExecutionSimulator:
     # Displayed-size depletion can advance modeled queue position, but L2 cannot tell
     # whether the change was cancellation or execution; the configured model owns that assumption.
     def _process_depth_depletion(self, update: DepthUpdate) -> None:
+        """Apply the configured sensitivity assumption to displayed-size decreases."""
         if self.config.queue_model is QueueModel.TRADE_ONLY or self.book.last_update_id == 0:
             return
         decreases: dict[tuple[str, int], int] = {}
@@ -601,6 +625,7 @@ class ExecutionSimulator:
         *,
         maker: bool,
     ) -> None:
+        """Apply position, cash, fees, fill state, and future-markout tracking atomically."""
         if quantity <= 0:
             return
         if not self._position_allows(order.request.side, quantity):
@@ -631,6 +656,7 @@ class ExecutionSimulator:
         self._pending_markouts.append(len(self.fills) - 1)
 
     def _update_mid_and_markouts(self, timestamp_ns: int) -> None:
+        """Refresh marked midprice and complete markouts whose horizons elapsed."""
         if self.book.last_update_id == 0:
             return
         self.latest_mid = (self.book.best_bid.price + self.book.best_ask.price) / (2 * PRICE_SCALE)
@@ -647,6 +673,7 @@ class ExecutionSimulator:
         self._pending_markouts = remaining
 
     def _process_next_cancel(self) -> None:
+        """Apply the next cancel, including cancel-before-order arrival."""
         _arrival, request = self._pending_cancels.pop(0)
         order = self.orders.get(request.order_id)
         if order and order.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED):
@@ -679,6 +706,7 @@ class ExecutionSimulator:
         self.orders[pending.order_id] = cancelled
 
     def _expire_orders(self, timestamp_ns: int, *, final: bool = False) -> None:
+        """Expire live orders at their deadlines or at end of recording."""
         for order_id in list(self._active_order_ids):
             order = self.orders[order_id]
             if final or (
@@ -689,6 +717,7 @@ class ExecutionSimulator:
                 self._active_order_ids.remove(order_id)
 
     def _finalize_pending_requests(self) -> None:
+        """Represent never-arrived requests explicitly as expired outcomes."""
         for request in self._pending_requests:
             arrival = self._order_arrival(request)
             expiry = self._expiry_timestamp(arrival, request.time_to_live_ns)
@@ -698,6 +727,7 @@ class ExecutionSimulator:
         self._pending_requests.clear()
 
     def _cancel_all(self, reason: str) -> None:
+        """Cancel every active order with a shared observable reason."""
         for order_id in self._active_order_ids:
             order = self.orders[order_id]
             if order.status in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED):
@@ -710,6 +740,7 @@ class ExecutionSimulator:
         return abs(projected) <= self.config.max_absolute_position
 
     def _check_kill_switch(self) -> None:
+        """Cancel live orders once marked equity breaches the configured loss limit."""
         if self.killed or not math.isfinite(self.config.kill_switch_loss_quote):
             return
         equity = self.cash_quote

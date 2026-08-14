@@ -22,6 +22,8 @@
 #include "market_engine/recording/TopOfBookBinaryFormat.hpp"
 #include "market_engine/concurrency/SpscRingBuffer.hpp"
 
+// Validates and republishes a recording through the live SPSC data path.
+// Backpressure delays replay rather than dropping records, preserving source identity.
 class BinaryReplay {
 public:
     BinaryReplay(
@@ -34,6 +36,8 @@ public:
           backpressure_events_(backpressure_events),
           replay_errors_(replay_errors) {}
 
+    // Execute one replay session and convert all worker-thread exceptions into
+    // observable counters/error text before clearing the shared running flag.
     void run(
         std::atomic<bool>& running,
         const std::string& file_path,

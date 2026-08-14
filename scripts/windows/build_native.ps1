@@ -1,6 +1,7 @@
 # Deterministic Windows native build: resolves the repository root, activates x64 MSVC,
 # builds/tests the C++ extension with Ninja/vcpkg, installs quant_engine, and verifies it.
 
+# Fail fast so partial toolchain setup or build output is never treated as success.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -36,6 +37,7 @@ foreach ($Tool in @($CMake, $CTest)) {
     }
 }
 
+# Resolve vcpkg from explicit configuration first, then conventional local locations.
 $Candidates = @()
 if ($env:VCPKG_ROOT) {
     $Candidates += $env:VCPKG_ROOT
@@ -65,6 +67,7 @@ if (-not $VcpkgRoot) {
 
 Write-Host "[PASS] vcpkg: $VcpkgRoot" -ForegroundColor Green
 
+# Discover an installed MSVC x64 toolchain through Visual Studio's supported locator.
 $VsWhereCandidates = @()
 if (${env:ProgramFiles(x86)}) {
     $VsWhereCandidates += (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe')
@@ -121,6 +124,8 @@ if ($Compiler -notmatch 'Microsoft Visual Studio' -or $Linker -notmatch 'Microso
 Write-Host "[PASS] MSVC compiler: $Compiler" -ForegroundColor Green
 Write-Host "[PASS] MSVC linker:   $Linker" -ForegroundColor Green
 
+# Reconfigure from a clean build tree so cached compilers or triplets cannot leak
+# between verification runs.
 $Toolchain = Join-Path $VcpkgRoot 'scripts\buildsystems\vcpkg.cmake'
 $Build = Join-Path $Root 'build-native'
 if (Test-Path $Build) {
@@ -152,6 +157,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Native tests failed.'
 }
 
+# Install only the extension produced by this build, excluding vcpkg internals.
 $BuiltPyd = Get-ChildItem $Build -Filter 'quant_engine*.pyd' -File -Recurse |
     Where-Object { $_.FullName -notlike '*\vcpkg_installed\*' } |
     Select-Object -First 1

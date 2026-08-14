@@ -48,6 +48,11 @@ MAX_LATENCY_SAMPLES_PER_INTERVAL = 50_000
 
 
 class EngineRunner(threading.Thread):
+    """Run the native ingestion engine away from Tk's event thread.
+
+    The worker communicates with the UI exclusively through event_queue; Tk widgets must only be
+    touched by the main thread.
+    """
     def __init__(
         self,
         event_queue: queue.Queue,
@@ -68,6 +73,7 @@ class EngineRunner(threading.Thread):
         self.stop_event = threading.Event()
 
     def request_stop(self) -> None:
+        """Request cooperative shutdown without blocking Tk's event thread."""
         self.stop_event.set()
 
     def emit(self, kind: str, payload: object) -> None:
@@ -75,6 +81,11 @@ class EngineRunner(threading.Thread):
 
     @staticmethod
     def _sample_latency(values: np.ndarray, remaining: int) -> np.ndarray:
+        """Return a deterministic bounded sample while preserving the interval endpoints.
+
+        Bounding UI telemetry prevents sustained high-rate feeds from creating unbounded
+        temporary arrays.
+        """
         if remaining <= 0 or values.size == 0:
             return np.empty(0, dtype=np.float64)
         if values.size <= remaining:
@@ -83,6 +94,11 @@ class EngineRunner(threading.Thread):
         return values[indices].copy()
 
     def run(self) -> None:
+        """Drive live ingestion or deterministic replay and emit periodic UI snapshots.
+
+        The method owns the native engine lifecycle, resets feature history at continuity
+        boundaries, and drains/finalizes recording state before reporting completion.
+        """
         engine = None
         total_ticks = 0
         try:
@@ -279,6 +295,11 @@ class EngineRunner(threading.Thread):
 # UI code orchestrates subprocesses/background work but does not own market-data
 # correctness. Engine/research invariants remain in the domain modules tested separately.
 class MarketWorkstation(tk.Tk):
+    """Desktop orchestration shell for capture, replay, research, and evidence workflows.
+
+    Domain correctness remains in the native and Python subsystem modules; this class
+    coordinates background work and presents their results.
+    """
     def __init__(self) -> None:
         super().__init__()
         self.withdraw()
@@ -840,6 +861,7 @@ class MarketWorkstation(tk.Tk):
         return self.engine_runner is not None and self.engine_runner.is_alive()
 
     def start_live_capture(self) -> None:
+        """Validate the destination and start one background live-capture session."""
         if self._runner_busy():
             messagebox.showwarning("Engine busy", "Stop the current live/replay session first.", parent=self)
             return
@@ -874,6 +896,7 @@ class MarketWorkstation(tk.Tk):
         self.global_status.set("● LIVE")
 
     def start_alpha_replay(self) -> None:
+        """Start deterministic replay with the selected model and recording artifacts."""
         if self._runner_busy():
             messagebox.showwarning("Engine busy", "Stop the current session first.", parent=self)
             return
@@ -911,6 +934,7 @@ class MarketWorkstation(tk.Tk):
         self.global_status.set("● REPLAY")
 
     def start_alpha_live(self) -> None:
+        """Start live model monitoring without enabling implicit order execution."""
         if self._runner_busy():
             messagebox.showwarning("Engine busy", "Stop the current session first.", parent=self)
             return
@@ -929,6 +953,7 @@ class MarketWorkstation(tk.Tk):
         self.global_status.set("● LIVE ALPHA")
 
     def stop_engine(self) -> None:
+        """Signal the active engine worker to stop and finalize its resources."""
         if self.engine_runner:
             self.engine_runner.request_stop()
             self.global_status.set("● STOPPING")
@@ -995,6 +1020,11 @@ class MarketWorkstation(tk.Tk):
         packaged_name: str,
         extra_arguments: list[str] | None = None,
     ) -> None:
+        """Run a Level-2 diagnostic command off the Tk thread and publish captured output.
+
+        Subprocess isolation keeps long verification or benchmark work from freezing the desktop
+        event loop.
+        """
         path = self._selected_l2_path()
         if path is None:
             messagebox.showwarning("L2 selection", "Select an L2 recording first.", parent=self)
@@ -1039,6 +1069,11 @@ class MarketWorkstation(tk.Tk):
         )
 
     def start_training(self) -> None:
+        """Validate the selected recordings and start one background research run.
+
+        Training is serialized so artifact publication and holdout bookkeeping cannot overlap in
+        the desktop workflow.
+        """
         if self.training_thread and self.training_thread.is_alive():
             return
         selections = self.research_list.curselection()
@@ -1222,6 +1257,10 @@ class MarketWorkstation(tk.Tk):
         )
 
     def _poll_events(self) -> None:
+        """Drain background events on Tk's main thread and reschedule polling.
+
+        This is the sole bridge that mutates widgets in response to engine or training workers.
+        """
         try:
             while True:
                 kind, payload = self.engine_events.get_nowait()
@@ -1399,6 +1438,11 @@ class MarketWorkstation(tk.Tk):
         messagebox.showinfo("Evidence brief", f"Created:\n{output}", parent=self)
 
     def on_close(self) -> None:
+        """Coordinate graceful application shutdown without abandoning active work.
+
+        Training must finish before exit, while an active engine is first asked to stop so
+        recordings can finalize cleanly.
+        """
         if self._closing:
             return
         if self.training_thread and self.training_thread.is_alive():

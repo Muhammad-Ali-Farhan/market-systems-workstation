@@ -28,6 +28,7 @@ static_assert(std::is_standard_layout_v<OrderBookState>,
 static_assert(std::is_trivially_copyable_v<OrderBookState>,
               "OrderBookState must be trivially copyable.");
 
+// Validate semantic fields in addition to the compile-time ABI/layout assertions.
 inline bool valid_order_book_state(const OrderBookState& state) noexcept {
     return state.timestamp_ns > 0 &&
            std::isfinite(state.best_bid) &&
