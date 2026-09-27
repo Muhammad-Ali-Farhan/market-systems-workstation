@@ -19,7 +19,7 @@ Record:
 
 ## Native book benchmark
 
-`l2_book_benchmark` compares the independent `std::map` reference and flat sorted book using identical seeded mutations. It reports:
+`l2_order_book_benchmark` compares the independent `std::map` reference and flat sorted book using identical seeded mutations. It reports:
 
 - Snapshot rebuild time.
 - Sustained update throughput.
@@ -38,7 +38,7 @@ The reference implementation is a correctness baseline, not expected to win.
 - Streaming L2 feature generation.
 - Peak Python memory where available.
 
-Use at least one warmup and seven measured trials. Report median and range. For tail latency, collect independent operation batches instead of deriving p99 from a single wall-clock total.
+Use at least one warmup and seven measured trials. Report median and range. Keep all measured trials once the protocol begins; do not discard inconvenient runs after observing their results. For tail latency, collect independent operation batches instead of deriving p99 from a single wall-clock total.
 
 ## Profiling sequence
 
