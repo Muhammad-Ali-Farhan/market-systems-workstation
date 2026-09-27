@@ -93,7 +93,7 @@ The benchmark sources are in [`benchmarks/native/`](benchmarks/native/). See [pe
 ## Repository layout
 
 ```text
-market-data-execution-engine/
+market-systems-workstation/
 ├── native/
 │   ├── include/market_engine/
 │   │   ├── concurrency/      # SPSC publication
