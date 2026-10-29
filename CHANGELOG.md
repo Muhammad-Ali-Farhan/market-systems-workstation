@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Removed a full O(n) per-update order-book audit from `apply()` in both L2 books, raising flat-book throughput from 139K to 12.28M updates/s on the 1M-update benchmark with an unchanged final state hash; re-measured and corrected the published flat-vs-`std::map` ratio from 6.71× to 1.20×.
 - Rebranded the public repository as **High-Performance Market Data & Execution Engine**, organized source by subsystem, and added reasoning-focused code documentation without changing intended algorithms or binary contracts.
 - Retained an in-flight REST snapshot until a later diff-depth event bridges it, preventing live synchronization from chasing the stream with repeated newer snapshots.
 - Ordered order arrivals, cancellations, and expirations on one deterministic control timeline and timestamped fills at actual simulated arrival time.

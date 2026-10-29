@@ -4,7 +4,8 @@ These results are local component-level microbenchmarks. They are not measuremen
 
 ## Environment
 
-- **Git commit:** `933ef8316abda15e07a8587a0ca55dd2d9456a46`
+- **Git commit (L2 order book):** `4c64e3a71b72dcf282446a9b2478f47905733e60`
+- **Git commit (SPSC ring buffer):** `933ef8316abda15e07a8587a0ca55dd2d9456a46`
 - **CPU:** Intel Core Ultra 7 155H
 - **CPU topology reported by Windows:** 16 cores / 22 logical processors
 - **RAM:** 31.5 GB
@@ -18,7 +19,7 @@ These results are local component-level microbenchmarks. They are not measuremen
 - **Build type:** Release
 - **C++ standard:** C++20
 
-The native build completed successfully and all four native tests passed before the final measurements were collected.
+The native build completed successfully and all four native tests passed before each set of final measurements was collected.
 
 ## Protocol
 
@@ -45,30 +46,36 @@ Each measured run applied 1,000,000 deterministic updates to both the independen
 
 | Run | `std::map` updates/s | Flat updates/s |
 | ---: | ---: | ---: |
-| 1 | 21,933.83 | 141,250.17 |
-| 2 | 18,277.12 | 139,356.86 |
-| 3 | 20,757.24 | 140,058.23 |
-| 4 | 20,943.20 | 138,942.72 |
-| 5 | 20,642.57 | 138,933.76 |
-| 6 | 15,808.68 | 138,821.81 |
-| 7 | 20,934.52 | 139,294.79 |
+| 1 | 9,007,313.04 | 13,053,279.57 |
+| 2 | 10,630,449.43 | 13,013,733.39 |
+| 3 | 9,416,816.55 | 13,891,860.20 |
+| 4 | 10,382,275.38 | 12,111,992.33 |
+| 5 | 9,395,785.24 | 11,582,224.53 |
+| 6 | 10,248,705.33 | 12,283,261.84 |
+| 7 | 10,611,216.69 | 11,893,166.07 |
 
-- **Flat median:** 139,294.79 updates/s
-- **Flat range:** 138,821.81–141,250.17 updates/s
-- **`std::map` median:** 20,757.24 updates/s
-- **Ratio of medians:** 6.71×
-- **Flat batch p99 median:** 8.47 µs/update
-- **Flat snapshot-install median:** 133.3 µs
-- **Flat Top-20 extraction median:** 98.96 ns
+- **Flat median:** 12,283,261.84 updates/s
+- **Flat range:** 11,582,224.53–13,891,860.20 updates/s
+- **`std::map` median:** 10,248,705.33 updates/s
+- **`std::map` range:** 9,007,313.04–10,630,449.43 updates/s
+- **Ratio of medians:** 1.20×
+- **Flat batch p99 median:** 146.5 ns/update
+- **Flat snapshot-install median:** 136.2 µs
+- **Flat Top-20 extraction median:** 103.58 ns
 
-The `std::map` reference showed substantially more run-to-run variance than the flat implementation. The relative figure above is therefore reported as the ratio of the two seven-run medians rather than a selected per-run speedup.
+The relative figure above is reported as the ratio of the two seven-run medians rather than a selected per-run speedup.
+
+### Change from the previous measurement
+
+Earlier results at commit `933ef83` reported 139,294.79 flat and 20,757.24 `std::map` updates/s (6.71×). Those runs were dominated by a full O(n) audit of every resting level after each applied update in both books. Per-level invariants (positive price, non-zero resting quantity, strict side ordering) are preserved by construction during `apply()`, so per-update validation now checks only the two-sided/uncrossed top of book in O(1). Full validation still runs after snapshot installs and through `validate_or_throw()`. The final state hash is unchanged, confirming identical logical results.
+
+With validation cost removed, the two structures are much closer on this workload: uniformly distributed updates across ~5,000 levels per side make the flat book's contiguous insert/erase shifts a meaningful share of its per-update cost. The earlier 6.71× figure should not be cited.
 
 ### Correctness guards
 
 Every measured run produced:
 
 - **Final state hash:** `6233951501269747521`
-- **Anti-optimization hash:** `13980092870487377440`
 
 The identical final state hash confirms that the reference and flat books reached the same logical state on the deterministic workload.
 

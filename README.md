@@ -86,7 +86,7 @@ Aggregated L2 does not expose exact order-level queue priority. Passive fills th
 
 These are **microbenchmark results**, not claims about complete exchange-to-strategy throughput or latency.
 
-- **Flat L2 order book:** 139.3K updates/s median across seven measured 1M-update runs, **6.71×** the `std::map` reference median. Both implementations finished every run with the same logical state hash.
+- **Flat L2 order book:** 12.28M updates/s median across seven measured 1M-update runs (146.5 ns batch p99 per update), **1.20×** the `std::map` reference median of 10.25M updates/s. Both implementations finished every run with the same logical state hash.
 - **SPSC ring buffer:** 528.4M 32-byte records/s median across seven measured 1B-record producer/consumer runs, corresponding to **15.75 GiB/s** median payload throughput. The hardened benchmark observes all 32 payload bytes and validates a deterministic, non-cryptographic payload-integrity guard so the transfer cannot collapse to a timestamp-only workload.
 
 The benchmark sources are in [`benchmarks/native/`](benchmarks/native/). See the [measured results and environment](docs/performance/results.md) for hardware, toolchain, run protocol, and raw per-run values, and the [performance methodology](docs/performance/methodology.md) for scope and interpretation.
