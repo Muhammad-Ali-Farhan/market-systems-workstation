@@ -94,7 +94,11 @@ public:
             update_ask(level);
         }
         last_update_id_ = update.final_update_id;
-        validate_or_throw();
+        // Per-level invariants (positive price, non-zero resting quantity, strict
+        // ordering) are preserved by construction: inputs are validated, zero
+        // quantities erase, and the maps keep keys sorted. Only the two-sided and
+        // uncrossed properties can change on an update, so check those in O(1).
+        validate_top_or_throw();
     }
 
     [[nodiscard]] std::uint64_t last_update_id() const noexcept {
@@ -115,13 +119,19 @@ public:
         return detail::hash_levels(last_update_id_, bid_levels, ask_levels);
     }
 
-    void validate_or_throw() const {
+    void validate_top_or_throw() const {
         if (bids_.empty() || asks_.empty()) {
             throw std::runtime_error("L2 book must remain two-sided.");
         }
         if (bids_.begin()->first >= asks_.begin()->first) {
             throw std::runtime_error("L2 order book is crossed or locked.");
         }
+    }
+
+    // Full O(n) audit of every level. Used after snapshot installs and available to
+    // tests/debug paths; per-update application relies on validate_top_or_throw().
+    void validate_or_throw() const {
+        validate_top_or_throw();
         for (const auto& [price, quantity] : bids_) {
             if (price <= 0 || quantity == 0) {
                 throw std::runtime_error("Invalid active bid level.");
@@ -209,7 +219,10 @@ public:
             update_level(asks_, level, false);
         }
         last_update_id_ = update.final_update_id;
-        validate_or_throw();
+        // update_level preserves per-level invariants by construction (validated
+        // input, zero quantity erases, lower_bound insertion keeps strict order), so
+        // only the two-sided/uncrossed top-of-book check is needed here: O(1).
+        validate_top_or_throw();
     }
 
     [[nodiscard]] std::uint64_t last_update_id() const noexcept {
@@ -253,13 +266,19 @@ public:
         return detail::hash_levels(last_update_id_, bids_, asks_);
     }
 
-    void validate_or_throw() const {
+    void validate_top_or_throw() const {
         if (bids_.empty() || asks_.empty()) {
             throw std::runtime_error("L2 book must remain two-sided.");
         }
         if (bids_.front().price >= asks_.front().price) {
             throw std::runtime_error("L2 order book is crossed or locked.");
         }
+    }
+
+    // Full O(n) audit of every level. Used after snapshot installs and available to
+    // tests/debug paths; per-update application relies on validate_top_or_throw().
+    void validate_or_throw() const {
+        validate_top_or_throw();
         validate_side(bids_, true);
         validate_side(asks_, false);
     }
